@@ -4,10 +4,17 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
-CREATE TYPE user_role AS ENUM ('admin_doctor', 'attendant_secretary');
-CREATE TYPE allergy_status AS ENUM ('unknown', 'none', 'known');
+DO $$ BEGIN
+    CREATE TYPE user_role AS ENUM ('admin_doctor', 'attendant_secretary');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE users (
+DO $$ BEGIN
+    CREATE TYPE allergy_status AS ENUM ('unknown', 'none', 'known');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username TEXT NOT NULL UNIQUE,
     full_name TEXT NOT NULL,
@@ -18,9 +25,11 @@ CREATE TABLE users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE patients (
+CREATE SEQUENCE IF NOT EXISTS patient_number_seq START WITH 10501;
+
+CREATE TABLE IF NOT EXISTS patients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    patient_number TEXT NOT NULL UNIQUE,
+    patient_number TEXT NOT NULL UNIQUE DEFAULT ('PT-' || lpad(nextval('patient_number_seq')::text, 5, '0')),
     full_name TEXT NOT NULL,
     date_of_birth DATE NOT NULL,
     sex TEXT NOT NULL CHECK (sex IN ('Female', 'Male', 'Intersex', 'Other', 'Unknown', 'Prefer not to say')),
@@ -36,7 +45,7 @@ CREATE TABLE patients (
     )
 );
 
-CREATE TABLE appointments (
+CREATE TABLE IF NOT EXISTS appointments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
     clinician_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -58,7 +67,7 @@ CREATE TABLE appointments (
 );
 
 -- One visit represents the complete attendant-to-doctor encounter.
-CREATE TABLE visits (
+CREATE TABLE IF NOT EXISTS visits (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
     appointment_id UUID UNIQUE REFERENCES appointments(id) ON DELETE SET NULL,
@@ -90,7 +99,7 @@ CREATE TABLE visits (
     CONSTRAINT visits_queue_timestamp CHECK (status NOT IN ('waiting', 'in_progress', 'completed') OR queued_at IS NOT NULL)
 );
 
-CREATE TABLE prescriptions (
+CREATE TABLE IF NOT EXISTS prescriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE RESTRICT,
     doctor_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -103,7 +112,7 @@ CREATE TABLE prescriptions (
 
 -- Doctor-facing timeline source: each completed visit and its prescriptions.
 -- API authorization must restrict this view to admin_doctor users.
-CREATE VIEW completed_visit_history AS
+CREATE OR REPLACE VIEW completed_visit_history AS
 SELECT
     v.id AS visit_id,
     v.patient_id,
@@ -132,10 +141,10 @@ LEFT JOIN prescriptions AS p ON p.visit_id = v.id
 WHERE v.status = 'completed'
 GROUP BY v.id;
 
-CREATE INDEX patients_name_idx ON patients (lower(full_name));
-CREATE INDEX visits_patient_timeline_idx ON visits (patient_id, created_at DESC);
-CREATE INDEX visits_waiting_queue_idx ON visits (queued_at ASC) WHERE status = 'waiting';
-CREATE INDEX visits_status_created_idx ON visits (status, created_at ASC);
-CREATE INDEX prescriptions_visit_date_idx ON prescriptions (visit_id, prescribed_at DESC);
-CREATE INDEX appointments_patient_start_idx ON appointments (patient_id, start_time);
-CREATE INDEX appointments_clinician_start_idx ON appointments (clinician_id, start_time);
+CREATE INDEX IF NOT EXISTS patients_name_idx ON patients (lower(full_name));
+CREATE INDEX IF NOT EXISTS visits_patient_timeline_idx ON visits (patient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS visits_waiting_queue_idx ON visits (queued_at ASC) WHERE status = 'waiting';
+CREATE INDEX IF NOT EXISTS visits_status_created_idx ON visits (status, created_at ASC);
+CREATE INDEX IF NOT EXISTS prescriptions_visit_date_idx ON prescriptions (visit_id, prescribed_at DESC);
+CREATE INDEX IF NOT EXISTS appointments_patient_start_idx ON appointments (patient_id, start_time);
+CREATE INDEX IF NOT EXISTS appointments_clinician_start_idx ON appointments (clinician_id, start_time);
