@@ -1,0 +1,7 @@
+.git
+.context
+.env
+.env.*
+**/node_modules
+**/dist
+**/coverage

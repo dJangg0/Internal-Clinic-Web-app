@@ -17,6 +17,7 @@ import {
   FileText,
   HeartPulse,
   LayoutDashboard,
+  LogOut,
   Menu,
   MessageSquareText,
   MoreHorizontal,
@@ -32,6 +33,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import { apiFetch, LoginScreen, RoleSelectionScreen, useAuth, type AuthUser, type LoginRole, type UserRole } from './auth.tsx'
 
 type Page = 'dashboard' | 'patients' | 'appointments'
 type ChartTab = 'overview' | 'visit' | 'history' | 'prescriptions'
@@ -70,14 +72,12 @@ type Appointment = {
   time: string
   duration: number
   reason: string
-  status: 'scheduled' | 'confirmed' | 'checked_in' | 'completed' | 'cancelled'
+  status: 'scheduled' | 'confirmed' | 'checked_in' | 'completed' | 'cancelled' | 'no_show'
   clinician: string
 }
 type ModalName = 'walk-in' | 'appointment' | null
 
-const STORAGE_PATIENTS = 'northstar-demo-patients-v1'
-const STORAGE_APPOINTMENTS = 'northstar-demo-appointments-v1'
-const clinicianName = 'Dr. Maya Reyes'
+const clinicianName = 'Clinic doctor'
 
 function dateKey(date: Date) {
   const y = date.getFullYear()
@@ -107,83 +107,66 @@ function todayLabel() {
   return new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date())
 }
 
-function createSeedPatients(): Patient[] {
-  return [
-    {
-      id: 'p-1001', name: 'Sofia Reyes', initials: 'SR', birthDate: '1994-05-12', sex: 'Female', phone: '+1 (713) 555-0142', email: 'sofia.reyes@example.test', patientNumber: 'PT-10482', joined: '2023-08-18', allergy: 'Penicillin', allergyStatus: 'known', lastVisit: dateKey(new Date()),
-      notes: 'Patient reports a mild headache since yesterday afternoon. Hydration and sleep have been normal. No vision changes reported.',
-      records: [{ id: 'r-1', date: '2026-02-13', signs: 'Afebrile; vitals within expected range.', symptoms: 'Seasonal nasal congestion and sneezing.', diagnosis: 'Allergic rhinitis' }],
-      prescriptions: [{ id: 'rx-1', date: '2026-02-13', medication: 'Cetirizine', strength: '10 mg', instructions: 'Take one tablet by mouth once daily.', duration: '14 days', notes: 'Demo record' }],
-    },
-    {
-      id: 'p-1002', name: 'Mateo Cruz', initials: 'MC', birthDate: '2017-11-03', sex: 'Male', phone: '+1 (713) 555-0186', email: 'ana.cruz@example.test', patientNumber: 'PT-10476', joined: '2023-08-15', allergy: 'No known allergies', allergyStatus: 'none', lastVisit: '2026-10-22',
-      notes: '', records: [{ id: 'r-2', date: '2026-10-22', signs: 'Temperature 37.1°C.', symptoms: 'Intermittent cough for two days.', diagnosis: 'Acute upper respiratory symptoms' }], prescriptions: [],
-    },
-    {
-      id: 'p-1003', name: 'Elena Santos', initials: 'ES', birthDate: '1982-01-29', sex: 'Female', phone: '+1 (713) 555-0108', email: 'elena.santos@example.test', patientNumber: 'PT-10394', joined: '2023-06-29', allergy: 'No known allergies', allergyStatus: 'none', lastVisit: '2026-10-30',
-      notes: '', records: [{ id: 'r-3', date: '2026-10-30', signs: 'Blood pressure 122/78 mmHg.', symptoms: 'Routine follow-up; no new concerns.', diagnosis: 'Preventive visit' }], prescriptions: [],
-    },
-    {
-      id: 'p-1004', name: 'Noah Bennett', initials: 'NB', birthDate: '1990-07-08', sex: 'Male', phone: '+1 (713) 555-0173', email: 'noah.bennett@example.test', patientNumber: 'PT-10381', joined: '2023-06-17', allergy: 'Sulfa drugs', allergyStatus: 'known', lastVisit: '2026-10-18',
-      notes: '', records: [], prescriptions: [],
-    },
-    {
-      id: 'p-1005', name: 'Amara Wilson', initials: 'AW', birthDate: '2001-03-17', sex: 'Female', phone: '+1 (713) 555-0112', email: 'amara.wilson@example.test', patientNumber: 'PT-10365', joined: '2023-05-28', allergy: 'No known allergies', allergyStatus: 'none', lastVisit: '2026-10-14',
-      notes: '', records: [], prescriptions: [],
-    },
-  ]
-}
-
-function createSeedAppointments(): Appointment[] {
-  const today = dateKey(new Date())
-  const next = new Date()
-  next.setDate(next.getDate() + 1)
-  const tomorrow = dateKey(next)
-  return [
-    { id: 'a-1', patientId: 'p-1001', date: today, time: '09:00', duration: 30, reason: 'Follow-up · headache', status: 'checked_in', clinician: clinicianName },
-    { id: 'a-2', patientId: 'p-1002', date: today, time: '09:30', duration: 30, reason: 'Cough and congestion', status: 'confirmed', clinician: clinicianName },
-    { id: 'a-3', patientId: 'p-1003', date: today, time: '10:30', duration: 45, reason: 'Annual wellness visit', status: 'scheduled', clinician: clinicianName },
-    { id: 'a-4', patientId: 'p-1004', date: today, time: '13:00', duration: 30, reason: 'Medication review', status: 'scheduled', clinician: clinicianName },
-    { id: 'a-5', patientId: 'p-1005', date: tomorrow, time: '10:00', duration: 30, reason: 'New patient consultation', status: 'confirmed', clinician: clinicianName },
-  ]
-}
-
-function readStored<T>(key: string, fallback: () => T): T {
-  try {
-    const value = localStorage.getItem(key)
-    return value ? JSON.parse(value) as T : fallback()
-  } catch {
-    return fallback()
-  }
-}
-
-function readStoredPatients(): Patient[] {
-  const stored = readStored<(Patient & { gender?: string; allergyStatus?: AllergyStatus })[]>(STORAGE_PATIENTS, createSeedPatients)
-  return stored.map((patient) => ({
-    ...patient,
-    sex: patient.sex ?? patient.gender ?? '',
-    allergyStatus: patient.allergyStatus ?? (patient.allergy === 'No known allergies' ? 'none' : patient.allergy === 'Not recorded' ? 'unknown' : 'known'),
-  }))
-}
-
 function initialsFromName(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('')
 }
 
+type ApiPatient = { id: string; name: string; patientNumber: string; birthDate: string; sex: string; phone: string; email: string; allergyStatus: AllergyStatus; allergies: string[]; joined: string }
+function fromApiPatient(patient: ApiPatient): Patient {
+  return {
+    ...patient,
+    initials: initialsFromName(patient.name),
+    allergy: patient.allergyStatus === 'none' ? 'No known allergies' : patient.allergyStatus === 'known' ? patient.allergies.join(', ') : 'Not recorded',
+    lastVisit: 'New patient',
+    notes: '',
+    records: [],
+    prescriptions: [],
+  }
+}
+
 function App() {
-  const [patients, setPatients] = useState<Patient[]>(readStoredPatients)
-  const [appointments, setAppointments] = useState<Appointment[]>(() => readStored(STORAGE_APPOINTMENTS, createSeedAppointments))
+  const { user, loading, signOut } = useAuth()
+  const [loginRole, setLoginRole] = useState<LoginRole | null>(null)
+  if (loading) return <div className="auth-loading" role="status">Checking your clinic session…</div>
+  if (!user) return loginRole
+    ? <LoginScreen role={loginRole} onBack={() => setLoginRole(null)} />
+    : <RoleSelectionScreen onSelect={setLoginRole} />
+  return <ClinicWorkspace user={user} onSignOut={() => { setLoginRole(null); void signOut() }} />
+}
+
+function ClinicWorkspace({ user, onSignOut }: { user: AuthUser; onSignOut: () => void }) {
+  const [patients, setPatients] = useState<Patient[]>([])
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [workspaceError, setWorkspaceError] = useState('')
   const [page, setPage] = useState<Page>('dashboard')
   const [chartPatientId, setChartPatientId] = useState<string | null>(null)
   const [chartTab, setChartTab] = useState<ChartTab>('overview')
   const [modal, setModal] = useState<ModalName>(null)
+  const [editPatientId, setEditPatientId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const isDoctor = user.role === 'admin_doctor'
 
-  useEffect(() => localStorage.setItem(STORAGE_PATIENTS, JSON.stringify(patients)), [patients])
-  useEffect(() => localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(appointments)), [appointments])
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      apiFetch<{ patients: ApiPatient[] }>('/api/patients'),
+      apiFetch<{ appointments: Appointment[] }>('/api/appointments'),
+    ]).then(([patientResult, appointmentResult]) => {
+      if (!active) return
+      setPatients(patientResult.patients.map(fromApiPatient))
+      setAppointments(appointmentResult.appointments)
+      setWorkspaceError('')
+    }).catch((error: unknown) => {
+      if (active) setWorkspaceError(error instanceof Error ? error.message : 'Could not load clinic records.')
+    }).finally(() => {
+      if (active) setWorkspaceLoading(false)
+    })
+    return () => { active = false }
+  }, [])
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -209,50 +192,133 @@ function App() {
   }
 
   function openPatient(patientId: string, tab: ChartTab = 'overview') {
+    if (!isDoctor && (tab === 'history' || tab === 'prescriptions')) {
+      tab = 'overview'
+      notify('Medical history and prescriptions are available to doctors only.')
+    }
     setChartPatientId(patientId)
     setChartTab(tab)
     setSearch('')
     setPage('patients')
     setMobileNavOpen(false)
+    if (isDoctor) {
+      apiFetch<{ visits: Array<{
+        id: string
+        date: string
+        blood_pressure: string
+        weight_kg: string | null
+        temperature_c: string | null
+        chief_complaint: string
+        initial_notes: string
+        diagnosis: string
+        prescriptions: Array<{ id: string; medications: Array<Partial<Prescription>>; notes: string; prescribed_at: string }>
+      }> }>(`/api/patients/${patientId}/history`).then(({ visits }) => {
+        const records: MedicalRecord[] = visits.map((visit) => ({
+          id: visit.id,
+          date: visit.date.slice(0, 10),
+          signs: [visit.blood_pressure, visit.weight_kg ? `Weight ${visit.weight_kg} kg` : '', visit.temperature_c ? `Temperature ${visit.temperature_c} °C` : ''].filter(Boolean).join(' · '),
+          symptoms: [visit.chief_complaint, visit.initial_notes].filter(Boolean).join('\n'),
+          diagnosis: visit.diagnosis,
+        }))
+        const prescriptions: Prescription[] = visits.flatMap((visit) => visit.prescriptions.flatMap((prescription) => prescription.medications.map((medication, index) => ({
+          id: `${prescription.id}-${index}`,
+          date: prescription.prescribed_at.slice(0, 10),
+          medication: String(medication.medication ?? ''),
+          strength: String(medication.strength ?? ''),
+          instructions: String(medication.instructions ?? ''),
+          duration: String(medication.duration ?? ''),
+          notes: String(medication.notes ?? prescription.notes ?? ''),
+        }))))
+        setPatients((current) => current.map((patient) => patient.id === patientId
+          ? { ...patient, records, prescriptions, lastVisit: records[0]?.date ?? 'New patient' }
+          : patient))
+      }).catch(() => notify('Medical history could not be loaded.'))
+    }
+  }
+
+  function changeChartTab(tab: ChartTab) {
+    if (!isDoctor && (tab === 'history' || tab === 'prescriptions')) {
+      setChartTab('overview')
+      notify('Medical history and prescriptions are available to doctors only.')
+      return
+    }
+    setChartTab(tab)
   }
 
   function updatePatient(patientId: string, update: Partial<Patient>) {
     setPatients((current) => current.map((patient) => patient.id === patientId ? { ...patient, ...update } : patient))
   }
 
-  function addPatient(values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) {
-    const patient: Patient = {
-      ...values,
-      id: `p-${Date.now()}`,
-      initials: initialsFromName(values.name),
-      patientNumber: `PT-${String(10500 + patients.length).padStart(5, '0')}`,
-      joined: dateKey(new Date()),
-      lastVisit: 'New patient',
-      notes: '',
-      records: [],
-      prescriptions: [],
+  async function updatePatientDetails(patientId: string, values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergyStatus: AllergyStatus; allergy: string }) {
+    const allergies = values.allergyStatus === 'known' ? values.allergy.split(',').map((item) => item.trim()).filter(Boolean) : []
+    const result = await apiFetch<{ patient: ApiPatient }>(`/api/patients/${patientId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fullName: values.name,
+        dateOfBirth: values.birthDate,
+        sex: values.sex,
+        contactNumber: values.phone,
+        email: values.email,
+        allergyStatus: values.allergyStatus,
+        allergies,
+      }),
+    })
+    const updated = fromApiPatient(result.patient)
+    setPatients((current) => current.map((patient) => patient.id === patientId
+      ? { ...updated, records: patient.records, prescriptions: patient.prescriptions, lastVisit: patient.lastVisit, notes: patient.notes }
+      : patient))
+    setEditPatientId(null)
+    notify('Patient details updated.')
+  }
+
+  async function deletePatient(patientId: string) {
+    if (!isDoctor || !window.confirm('Delete this patient? Patients with visits or appointments cannot be deleted.')) return
+    try {
+      await apiFetch<void>(`/api/patients/${patientId}`, { method: 'DELETE' })
+      setPatients((current) => current.filter((patient) => patient.id !== patientId))
+      setChartPatientId(null)
+      notify('Patient deleted.')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not delete this patient.')
     }
+  }
+
+  async function addPatient(values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) {
+    const allergyItems = values.allergyStatus === 'known' ? values.allergy.split(',').map((item) => item.trim()).filter(Boolean) : []
+    const result = await apiFetch<{ patient: ApiPatient }>('/api/patients', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: values.name,
+        dateOfBirth: values.birthDate,
+        sex: values.sex,
+        contactNumber: values.phone,
+        email: values.email,
+        allergyStatus: values.allergyStatus,
+        allergies: allergyItems,
+      }),
+    })
+    const patient = fromApiPatient(result.patient)
     setPatients((current) => [patient, ...current])
     setModal(null)
     openPatient(patient.id, 'overview')
     notify('Patient registered. Their chart is ready.')
   }
 
-  function addAppointment(values: Omit<Appointment, 'id' | 'clinician'>) {
-    const start = toMinutes(values.time)
-    const end = start + values.duration
-    const overlaps = appointments.some((appointment) => {
-      if (appointment.date !== values.date || !['scheduled', 'confirmed', 'checked_in'].includes(appointment.status)) return false
-      const otherStart = toMinutes(appointment.time)
-      return start < otherStart + appointment.duration && end > otherStart
-    })
-    if (overlaps) return 'That time overlaps an existing appointment. Choose another slot.'
-    setAppointments((current) => [...current, { ...values, id: `a-${Date.now()}`, clinician: clinicianName }])
-    setModal(null)
-    setPage('appointments')
-    setChartPatientId(null)
-    notify('Appointment booked and added to the calendar.')
-    return ''
+  async function addAppointment(values: Omit<Appointment, 'id' | 'clinician'>) {
+    try {
+      const result = await apiFetch<{ appointment: Appointment }>('/api/appointments', {
+        method: 'POST',
+        body: JSON.stringify({ patientId: values.patientId, date: values.date, time: values.time, duration: values.duration, reason: values.reason }),
+      })
+      setAppointments((current) => [...current, result.appointment])
+      setModal(null)
+      setPage('appointments')
+      setChartPatientId(null)
+      notify('Appointment booked and added to the calendar.')
+      return ''
+    } catch (error) {
+      return error instanceof Error ? error.message : 'Could not book this appointment.'
+    }
   }
 
   function createMedicalRecord(patient: Patient, record: Omit<MedicalRecord, 'id' | 'date'>) {
@@ -289,17 +355,17 @@ function App() {
           <NavButton icon={<CalendarDays size={18} />} label="Appointments" active={page === 'appointments'} onClick={() => navigate('appointments')} />
         </nav>
         <div className="sidebar-label sidebar-label-spaced">CLINICAL</div>
-        <nav className="primary-nav" aria-label="Clinical tools">
-          <NavButton icon={<FileText size={18} />} label="Clinical notes" active={Boolean(chartPatient && chartTab === 'visit')} onClick={() => chartPatient ? setChartTab('visit') : (navigate('patients'), notify('Choose a patient to open their clinical notes.'))} />
-          <NavButton icon={<Pill size={18} />} label="Prescriptions" active={Boolean(chartPatient && chartTab === 'prescriptions')} onClick={() => chartPatient ? setChartTab('prescriptions') : (navigate('patients'), notify('Choose a patient to review prescriptions.'))} />
-        </nav>
+        {isDoctor && <nav className="primary-nav" aria-label="Clinical tools">
+          <NavButton icon={<FileText size={18} />} label="Clinical notes" active={Boolean(chartPatient && chartTab === 'visit')} onClick={() => chartPatient ? changeChartTab('visit') : (navigate('patients'), notify('Choose a patient to open their clinical notes.'))} />
+          <NavButton icon={<Pill size={18} />} label="Prescriptions" active={Boolean(chartPatient && chartTab === 'prescriptions')} onClick={() => chartPatient ? changeChartTab('prescriptions') : (navigate('patients'), notify('Choose a patient to review prescriptions.'))} />
+        </nav>}
         <div className="sidebar-bottom">
-          <div className="sidebar-tip"><span className="tip-icon"><ShieldCheck size={17} /></span><div><strong>Demo workspace</strong><span>Sample records only</span></div></div>
-          <div className="user-profile">
-            <span className="avatar avatar-teal">MR</span>
-            <span className="user-copy"><strong>Dr. Maya Reyes</strong><small>Primary care</small></span>
-            <MoreHorizontal size={19} className="user-more" />
-          </div>
+          <div className="sidebar-tip"><span className="tip-icon"><ShieldCheck size={17} /></span><div><strong>Signed in securely</strong><span>{isDoctor ? 'Admin / Doctor' : 'Attendant / Secretary'}</span></div></div>
+          <button type="button" className="user-profile" onClick={onSignOut} aria-label="Sign out">
+            <span className="avatar avatar-teal">{user.fullName.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span>
+            <span className="user-copy"><strong>{user.fullName}</strong><small>{isDoctor ? 'Admin / Doctor' : 'Attendant / Secretary'}</small></span>
+            <LogOut size={17} className="user-more" />
+          </button>
         </div>
       </aside>
 
@@ -323,12 +389,15 @@ function App() {
         </header>
 
         <main className="main-content">
-          {chartPatient ? (
+          {workspaceError ? <div className="page-wrap"><div className="surface workspace-error" role="alert"><strong>Could not load clinic records</strong><span>{workspaceError}</span><button className="button button-secondary" onClick={() => window.location.reload()}>Try again</button></div></div> : workspaceLoading ? <div className="page-wrap"><div className="surface workspace-loading" role="status">Loading clinic records…</div></div> : chartPatient ? (
             <PatientChart
               patient={chartPatient}
+              role={user.role}
               tab={chartTab}
-              onTabChange={setChartTab}
+              onTabChange={changeChartTab}
               onBack={() => setChartPatientId(null)}
+              onEdit={() => setEditPatientId(chartPatient.id)}
+              onDelete={() => { void deletePatient(chartPatient.id) }}
               onUpdate={(update) => updatePatient(chartPatient.id, update)}
               onAddRecord={(record) => createMedicalRecord(chartPatient, record)}
               onAddPrescription={(prescription) => createPrescription(chartPatient, prescription)}
@@ -351,11 +420,12 @@ function App() {
             <AppointmentsPage appointments={appointments} patients={patients} onOpenPatient={openPatient} onNewAppointment={() => setModal('appointment')} />
           )}
         </main>
-        <footer className="page-footer"><span>Northstar Clinic workspace · Demo</span><span><span className="online-dot" />Demo data stays in this browser</span></footer>
+        <footer className="page-footer"><span>Northstar Clinic workspace</span><span><span className="online-dot" />Signed in as {user.username}</span></footer>
       </div>
 
       {modal === 'walk-in' && <WalkInModal onClose={() => setModal(null)} onCreate={addPatient} />}
       {modal === 'appointment' && <AppointmentModal patients={patients} onClose={() => setModal(null)} onCreate={addAppointment} />}
+      {editPatientId && patients.find((patient) => patient.id === editPatientId) && <PatientEditModal patient={patients.find((patient) => patient.id === editPatientId)!} onClose={() => setEditPatientId(null)} onSave={updatePatientDetails} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
   )
@@ -516,7 +586,7 @@ function toMinutes(value: string) {
 }
 
 function StatusBadge({ status }: { status: Appointment['status'] }) {
-  const labels: Record<Appointment['status'], string> = { scheduled: 'Scheduled', confirmed: 'Confirmed', checked_in: 'Checked in', completed: 'Completed', cancelled: 'Cancelled' }
+  const labels: Record<Appointment['status'], string> = { scheduled: 'Scheduled', confirmed: 'Confirmed', checked_in: 'Checked in', completed: 'Completed', cancelled: 'Cancelled', no_show: 'No show' }
   return <span className={`status-badge status-${status}`}>{status === 'checked_in' && <i />}{labels[status]}</span>
 }
 
@@ -581,10 +651,11 @@ function PatientsPage({ patients, onOpenPatient, onNewPatient }: { patients: Pat
   </div>
 }
 
-function PatientChart({ patient, tab, onTabChange, onBack, onUpdate, onAddRecord, onAddPrescription, onSchedule, onToast }: {
-  patient: Patient; tab: ChartTab; onTabChange: (tab: ChartTab) => void; onBack: () => void; onUpdate: (update: Partial<Patient>) => void;
+function PatientChart({ patient, role, tab, onTabChange, onBack, onEdit, onDelete, onUpdate, onAddRecord, onAddPrescription, onSchedule, onToast }: {
+  patient: Patient; role: UserRole; tab: ChartTab; onTabChange: (tab: ChartTab) => void; onBack: () => void; onEdit: () => void; onDelete: () => void; onUpdate: (update: Partial<Patient>) => void;
   onAddRecord: (record: Omit<MedicalRecord, 'id' | 'date'>) => void; onAddPrescription: (prescription: Omit<Prescription, 'id' | 'date'>) => void; onSchedule: () => void; onToast: (message: string) => void
 }) {
+  const isDoctor = role === 'admin_doctor'
   const [saving, setSaving] = useState(false)
   const [signs, setSigns] = useState('')
   const [symptoms, setSymptoms] = useState('')
@@ -629,23 +700,25 @@ function PatientChart({ patient, tab, onTabChange, onBack, onUpdate, onAddRecord
   const tabs: { id: ChartTab; label: string; icon: ReactNode }[] = [
     { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
     { id: 'visit', label: 'Visit notes', icon: <MessageSquareText size={15} /> },
-    { id: 'history', label: 'Medical history', icon: <FileText size={15} /> },
-    { id: 'prescriptions', label: 'Prescriptions', icon: <Pill size={15} /> },
+    ...(isDoctor ? [
+      { id: 'history' as ChartTab, label: 'Medical history', icon: <FileText size={15} /> },
+      { id: 'prescriptions' as ChartTab, label: 'Prescriptions', icon: <Pill size={15} /> },
+    ] : []),
   ]
   return <div className="page-wrap chart-page">
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} />Back to patients</button>
     <section className="surface profile-hero">
       <div className="profile-main"><Avatar patient={patient} large /><div className="profile-identity"><div className="profile-name-line"><h1>{patient.name}</h1><span className="profile-active"><i />Active patient</span></div><div className="profile-meta"><span>{patient.patientNumber}</span><i />{ageFromBirthDate(patient.birthDate) ?? 'Age not recorded'}{ageFromBirthDate(patient.birthDate) === null ? '' : ' years old'}<i />{patient.sex || 'Sex not recorded'}<i />Patient since {shortDate(patient.joined)}</div><div className="profile-contact"><span><span className="contact-symbol">⌕</span>{patient.phone || 'No phone on file'}</span><span><span className="contact-symbol">✉</span>{patient.email || 'No email on file'}</span></div></div></div>
-      <div className="profile-actions"><button className="button button-secondary" onClick={onSchedule}><CalendarPlus size={15} />Schedule</button><button className="button button-primary" onClick={() => onTabChange('visit')}><Plus size={16} />Start visit</button><MoreMenu label="More patient actions" items={[{ label: 'Copy patient ID', icon: <Copy size={15} />, onSelect: () => { void copyPatientId() } }, { label: 'Schedule appointment', icon: <CalendarPlus size={15} />, onSelect: onSchedule }]} /></div>
+      <div className="profile-actions"><button className="button button-secondary" onClick={onEdit}>Edit details</button><button className="button button-secondary" onClick={onSchedule}><CalendarPlus size={15} />Schedule</button><button className="button button-primary" onClick={() => onTabChange('visit')}><Plus size={16} />Start visit</button><MoreMenu label="More patient actions" items={[{ label: 'Copy patient ID', icon: <Copy size={15} />, onSelect: () => { void copyPatientId() } }, { label: 'Schedule appointment', icon: <CalendarPlus size={15} />, onSelect: onSchedule }, ...(isDoctor ? [{ label: 'Delete patient', icon: <X size={15} />, onSelect: onDelete }] : [])]} /></div>
     </section>
-    <div className="chart-alert"><span className="alert-icon"><HeartPulse size={15} /></span><span><strong>Allergies:</strong> {patient.allergy}</span><span className="alert-divider" /><span><strong>Last visit:</strong> {patient.lastVisit === 'New patient' ? 'No visits yet' : shortDate(patient.lastVisit)}</span><button onClick={() => onTabChange('history')}>View history <ArrowRight size={13} /></button></div>
+    <div className="chart-alert"><span className="alert-icon"><HeartPulse size={15} /></span><span><strong>Allergies:</strong> {patient.allergy}</span><span className="alert-divider" /><span><strong>Last visit:</strong> {patient.lastVisit === 'New patient' ? 'No visits yet' : shortDate(patient.lastVisit)}</span>{isDoctor && <button onClick={() => onTabChange('history')}>View history <ArrowRight size={13} /></button>}</div>
     <div className="chart-tabs">{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'chart-tab chart-tab-active' : 'chart-tab'} onClick={() => onTabChange(item.id)}>{item.icon}{item.label}{item.id === 'history' && <span>{patient.records.length}</span>}{item.id === 'prescriptions' && <span>{patient.prescriptions.length}</span>}</button>)}</div>
 
     {tab === 'overview' && <div className="chart-content chart-overview-grid">
       <div className="chart-main-column"><section className="surface detail-card"><div className="section-heading"><div><div className="section-kicker">PATIENT SNAPSHOT</div><h2>Overview</h2></div><span className="updated-chip"><Check size={13} />Chart up to date</span></div><div className="snapshot-grid"><InfoBlock label="Date of birth" value={patient.birthDate ? `${shortDate(patient.birthDate)}, ${new Date(`${patient.birthDate}T12:00:00`).getFullYear()}` : 'Not provided'} /><InfoBlock label="Sex" value={patient.sex || 'Not provided'} /><InfoBlock label="Phone number" value={patient.phone || 'Not provided'} /><InfoBlock label="Email address" value={patient.email || 'Not provided'} /><InfoBlock label="Patient ID" value={patient.patientNumber} /><InfoBlock label="Known allergies" value={patient.allergy} alert={patient.allergyStatus !== 'none'} /></div></section>
-        <section className="surface detail-card recent-note-card"><div className="section-heading"><div><div className="section-kicker">LATEST DOCUMENTATION</div><h2>Recent clinical note</h2></div><button className="text-button" onClick={() => onTabChange('history')}>Full history <ArrowRight size={14} /></button></div>{patient.records[0] ? <RecordSummary record={patient.records[0]} /> : <div className="empty-inline"><span><FileText size={19} /></span><div><strong>No visit notes yet</strong><p>Start a visit to add the first note to this chart.</p></div><button className="button button-soft" onClick={() => onTabChange('visit')}>Start visit</button></div>}</section>
+        {isDoctor && <section className="surface detail-card recent-note-card"><div className="section-heading"><div><div className="section-kicker">LATEST DOCUMENTATION</div><h2>Recent clinical note</h2></div><button className="text-button" onClick={() => onTabChange('history')}>Full history <ArrowRight size={14} /></button></div>{patient.records[0] ? <RecordSummary record={patient.records[0]} /> : <div className="empty-inline"><span><FileText size={19} /></span><div><strong>No visit notes yet</strong><p>Start a visit to add the first note to this chart.</p></div><button className="button button-soft" onClick={() => onTabChange('visit')}>Start visit</button></div>}</section>}
       </div>
-      <aside className="chart-side-column"><section className="surface side-detail-card"><div className="section-heading compact-heading"><div><div className="section-kicker">QUICK ACTIONS</div><h2>Patient care</h2></div></div><button className="care-action" onClick={() => onTabChange('visit')}><span className="care-icon care-note"><MessageSquareText size={17} /></span><span><strong>Write a visit note</strong><small>Document today’s encounter</small></span><ChevronRight size={16} /></button><button className="care-action" onClick={() => onTabChange('prescriptions')}><span className="care-icon care-rx"><Pill size={17} /></span><span><strong>Create prescription</strong><small>Add medication instructions</small></span><ChevronRight size={16} /></button><button className="care-action" onClick={onSchedule}><span className="care-icon care-appt"><CalendarPlus size={17} /></span><span><strong>Book appointment</strong><small>Choose a date and time</small></span><ChevronRight size={16} /></button></section>
+      <aside className="chart-side-column"><section className="surface side-detail-card"><div className="section-heading compact-heading"><div><div className="section-kicker">QUICK ACTIONS</div><h2>Patient care</h2></div></div><button className="care-action" onClick={() => onTabChange('visit')}><span className="care-icon care-note"><MessageSquareText size={17} /></span><span><strong>Write a visit note</strong><small>Document today’s encounter</small></span><ChevronRight size={16} /></button>{isDoctor && <button className="care-action" onClick={() => onTabChange('prescriptions')}><span className="care-icon care-rx"><Pill size={17} /></span><span><strong>Create prescription</strong><small>Add medication instructions</small></span><ChevronRight size={16} /></button>}<button className="care-action" onClick={onSchedule}><span className="care-icon care-appt"><CalendarPlus size={17} /></span><span><strong>Book appointment</strong><small>Choose a date and time</small></span><ChevronRight size={16} /></button></section>
         <section className="surface side-detail-card allergies-card"><div className="allergy-heading"><span><HeartPulse size={16} /></span><div><strong>Allergy information</strong><small>Review before prescribing</small></div></div><div className={patient.allergy === 'No known allergies' ? 'allergy-state allergy-state-clear' : 'allergy-state'}>{patient.allergy}</div><p>Confirm allergy status with the patient during each visit.</p></section>
       </aside>
     </div>}
@@ -654,10 +727,10 @@ function PatientChart({ patient, tab, onTabChange, onBack, onUpdate, onAddRecord
       <section className="surface note-workspace"><div className="note-toolbar"><div><div className="section-kicker">CURRENT ENCOUNTER</div><h2>Visit documentation</h2></div><span className="autosave-state"><span className={saving ? 'save-dot saving-dot' : 'save-dot'} />{saving ? 'Saving note…' : 'Saved just now'}</span></div>
         <div className="encounter-banner"><span className="encounter-icon"><Stethoscope size={18} /></span><div><strong>Office visit</strong><small>{fullDate(dateKey(new Date()))} · {clinicianName}</small></div><span className="encounter-status">In progress</span></div>
         <label className="field-label" htmlFor="live-note">Interview notes <span className="field-hint">Live-saved</span></label><textarea id="live-note" className="note-textarea" placeholder="Document the conversation as you go. Notes save automatically while you type…" value={patient.notes} onChange={(event) => onUpdate({ notes: event.target.value })} />
-        <div className="note-fields"><Field label="Signs" hint="Observed findings"><textarea value={signs} onChange={(event) => setSigns(event.target.value)} placeholder="e.g. Blood pressure, temperature, exam findings" /></Field><Field label="Symptoms" hint="Patient reported"><textarea value={symptoms} onChange={(event) => setSymptoms(event.target.value)} placeholder="e.g. Onset, duration, and associated symptoms" /></Field><Field label="Assessment / diagnosis"><input value={diagnosis} onChange={(event) => setDiagnosis(event.target.value)} placeholder="Add a working diagnosis" /></Field></div>
-        <div className="note-footer"><span><ShieldCheck size={14} />This note is stored in this browser demo.</span><button className="button button-primary" onClick={saveRecord}><Check size={16} />Save visit to chart</button></div>
+        <div className="note-fields"><Field label="Vitals / signs" hint="Observed findings"><textarea value={signs} onChange={(event) => setSigns(event.target.value)} placeholder="e.g. Blood pressure, weight, temperature" /></Field><Field label="Chief complaint" hint="Patient reported"><textarea value={symptoms} onChange={(event) => setSymptoms(event.target.value)} placeholder="What brought the patient in today?" /></Field>{isDoctor && <Field label="Assessment / diagnosis"><input value={diagnosis} onChange={(event) => setDiagnosis(event.target.value)} placeholder="Add a diagnosis" /></Field>}</div>
+        <div className="note-footer"><span><ShieldCheck size={14} />Initial notes are visible to the care team.</span>{isDoctor && <button className="button button-primary" onClick={saveRecord}><Check size={16} />Save visit to chart</button>}</div>
       </section>
-      <aside className="surface visit-context"><div className="section-kicker">CHART CONTEXT</div><h3>At a glance</h3><div className="context-patient"><Avatar patient={patient} /><span><strong>{patient.name}</strong><small>{ageFromBirthDate(patient.birthDate) ?? '—'} yrs · {patient.sex || '—'}</small></span></div><div className="context-divider" /><div className="context-row"><span>Allergies</span><strong className={patient.allergyStatus === 'none' ? 'context-good' : 'context-alert'}>{patient.allergy}</strong></div><div className="context-row"><span>Previous visits</span><strong>{patient.records.length}</strong></div><div className="context-row"><span>Active prescriptions</span><strong>{patient.prescriptions.length}</strong></div><button className="context-history-link" onClick={() => onTabChange('history')}>Review medical history <ArrowRight size={14} /></button><div className="context-tip"><span><ShieldCheck size={15} /></span><p>Keep notes clear and factual. Review the chart before saving the encounter.</p></div></aside>
+      <aside className="surface visit-context"><div className="section-kicker">CHART CONTEXT</div><h3>At a glance</h3><div className="context-patient"><Avatar patient={patient} /><span><strong>{patient.name}</strong><small>{ageFromBirthDate(patient.birthDate) ?? '—'} yrs · {patient.sex || '—'}</small></span></div><div className="context-divider" /><div className="context-row"><span>Allergies</span><strong className={patient.allergyStatus === 'none' ? 'context-good' : 'context-alert'}>{patient.allergy}</strong></div>{isDoctor && <><div className="context-row"><span>Previous visits</span><strong>{patient.records.length}</strong></div><div className="context-row"><span>Active prescriptions</span><strong>{patient.prescriptions.length}</strong></div><button className="context-history-link" onClick={() => onTabChange('history')}>Review medical history <ArrowRight size={14} /></button></>}<div className="context-tip"><span><ShieldCheck size={15} /></span><p>Keep notes clear and factual. Review the chart before saving the encounter.</p></div></aside>
     </div>}
 
     {tab === 'history' && <div className="chart-content"><section className="surface history-card"><div className="section-heading"><div><div className="section-kicker">LONGITUDINAL RECORD</div><h2>Medical history</h2></div><button className="button button-soft" onClick={() => onTabChange('visit')}><Plus size={15} />Add visit note</button></div>{patient.records.length ? <div className="timeline">{patient.records.map((record) => <div className="timeline-item" key={record.id}><div className="timeline-marker"><span /></div><div className="timeline-date">{fullDate(record.date)}</div><RecordSummary record={record} /></div>)}</div> : <EmptyState icon={<FileText size={21} />} title="No medical history yet" text="A saved visit summary will appear here." action="Start a visit" onClick={() => onTabChange('visit')} />}</section></div>}
@@ -730,14 +803,14 @@ function AppointmentsPage({ appointments, patients, onOpenPatient, onNewAppointm
   </div>
 }
 
-function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) => void }) {
+function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) => Promise<void> }) {
   const [form, setForm] = useState({ name: '', birthDate: '', sex: '', phone: '', email: '', allergyStatus: '' as '' | AllergyStatus, allergyDetails: '' })
   const [error, setError] = useState('')
   function updateForm(update: Partial<typeof form>) {
     setForm((current) => ({ ...current, ...update }))
     if (error) setError('')
   }
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
     if (!form.name.trim()) { setError('Enter the patient’s name to continue.'); return }
     if (!form.birthDate) { setError('Enter the patient’s date of birth.'); return }
@@ -750,15 +823,19 @@ function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (va
       : form.allergyStatus === 'unknown'
         ? 'Not recorded'
         : form.allergyDetails.trim()
-    onCreate({
-      name: form.name.trim(),
-      birthDate: form.birthDate,
-      sex: form.sex,
-      phone: form.phone.trim(),
-      email: form.email.trim(),
-      allergy,
-      allergyStatus: form.allergyStatus,
-    })
+    try {
+      await onCreate({
+        name: form.name.trim(),
+        birthDate: form.birthDate,
+        sex: form.sex,
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        allergy,
+        allergyStatus: form.allergyStatus,
+      })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Patient registration failed.')
+    }
   }
   return <Modal onClose={onClose} eyebrow="PATIENT REGISTRATION" title="New walk-in patient" subtitle="Capture the essentials, then continue straight to their chart." icon={<UserRoundPlus size={18} />}>
     <form onSubmit={submit} className="modal-form">
@@ -790,17 +867,69 @@ function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (va
   </Modal>
 }
 
-function AppointmentModal({ patients, onClose, onCreate }: { patients: Patient[]; onClose: () => void; onCreate: (values: Omit<Appointment, 'id' | 'clinician'>) => string }) {
+function PatientEditModal({ patient, onClose, onSave }: {
+  patient: Patient
+  onClose: () => void
+  onSave: (patientId: string, values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergyStatus: AllergyStatus; allergy: string }) => Promise<void>
+}) {
+  const [form, setForm] = useState({
+    name: patient.name,
+    birthDate: patient.birthDate,
+    sex: patient.sex,
+    phone: patient.phone,
+    email: patient.email,
+    allergyStatus: patient.allergyStatus,
+    allergy: patient.allergyStatus === 'known' ? patient.allergy : '',
+  })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!form.name.trim() || !form.birthDate || !form.sex) { setError('Name, date of birth, and sex are required.'); return }
+    if (form.birthDate > dateKey(new Date())) { setError('Date of birth cannot be in the future.'); return }
+    if (form.allergyStatus === 'known' && !form.allergy.trim()) { setError('Enter the known allergies.'); return }
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(patient.id, { ...form, name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), allergy: form.allergy.trim() })
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save patient details.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <Modal onClose={onClose} eyebrow="PATIENT REGISTRATION" title="Edit patient details" subtitle={`Update primary information for ${patient.name}.`} icon={<UserRoundPlus size={18} />}>
+    <form onSubmit={submit} className="modal-form">
+      <Field label="Patient name" required><input required maxLength={160} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
+      <div className="form-row">
+        <Field label="Date of birth" required hint={`${ageFromBirthDate(form.birthDate) ?? '—'} years old`}><input type="date" required max={dateKey(new Date())} value={form.birthDate} onChange={(event) => setForm({ ...form, birthDate: event.target.value })} /></Field>
+        <Field label="Sex" required><select required value={form.sex} onChange={(event) => setForm({ ...form, sex: event.target.value })}><option value="">Select...</option><option>Female</option><option>Male</option><option>Intersex</option><option>Other</option><option>Unknown</option><option>Prefer not to say</option></select></Field>
+      </div>
+      <div className="form-row">
+        <Field label="Contact number"><input type="tel" maxLength={32} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></Field>
+        <Field label="Email address"><input type="email" maxLength={254} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>
+      </div>
+      <Field label="Allergy status" required><select required value={form.allergyStatus} onChange={(event) => setForm({ ...form, allergyStatus: event.target.value as AllergyStatus, allergy: event.target.value === 'known' ? form.allergy : '' })}><option value="none">No known allergies</option><option value="known">Known allergies</option><option value="unknown">Unknown / not confirmed</option></select></Field>
+      {form.allergyStatus === 'known' && <Field label="Known allergies" required><input required maxLength={500} value={form.allergy} onChange={(event) => setForm({ ...form, allergy: event.target.value })} placeholder="Separate allergies with commas" /></Field>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></div>
+    </form>
+  </Modal>
+}
+
+function AppointmentModal({ patients, onClose, onCreate }: { patients: Patient[]; onClose: () => void; onCreate: (values: Omit<Appointment, 'id' | 'clinician'>) => Promise<string> }) {
   const [form, setForm] = useState({ patientId: patients[0]?.id ?? '', date: dateKey(new Date()), time: '11:00', duration: 30, reason: '' })
   const [error, setError] = useState('')
   function updateForm(update: Partial<typeof form>) {
     setForm((current) => ({ ...current, ...update }))
     if (error) setError('')
   }
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
     if (!form.patientId) { setError('Select a patient before booking.'); return }
-    const message = onCreate({ ...form, reason: form.reason.trim() || 'Office visit', status: 'scheduled' })
+    const message = await onCreate({ ...form, reason: form.reason.trim() || 'Office visit', status: 'scheduled' })
     if (message) setError(message)
   }
   return <Modal onClose={onClose} eyebrow="SCHEDULING" title="Book an appointment" subtitle="Choose a patient and a time that works for the clinic." icon={<CalendarPlus size={18} />}>
