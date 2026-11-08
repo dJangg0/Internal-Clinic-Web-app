@@ -23,6 +23,7 @@ import {
   Pill,
   Plus,
   Printer,
+  QrCode,
   Search,
   Settings2,
   ShieldCheck,
@@ -32,8 +33,9 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import QRCode from 'qrcode'
 
-type Page = 'dashboard' | 'patients' | 'appointments'
+type Page = 'dashboard' | 'patients' | 'appointments' | 'queue'
 type ChartTab = 'overview' | 'visit' | 'history' | 'prescriptions'
 type AllergyStatus = 'unknown' | 'none' | 'known'
 type Patient = {
@@ -73,10 +75,25 @@ type Appointment = {
   status: 'scheduled' | 'confirmed' | 'checked_in' | 'completed' | 'cancelled'
   clinician: string
 }
+type QueueEntry = {
+  id: string
+  number: string
+  name: string
+  phone: string
+  joinedAt: string
+  status: 'waiting' | 'called' | 'completed'
+}
+type QueueSession = {
+  date: string
+  token: string
+  isOpen: boolean
+  entries: QueueEntry[]
+}
 type ModalName = 'walk-in' | 'appointment' | null
 
 const STORAGE_PATIENTS = 'northstar-demo-patients-v1'
 const STORAGE_APPOINTMENTS = 'northstar-demo-appointments-v1'
+const STORAGE_QUEUE = 'northstar-demo-daily-queue-v1'
 const clinicianName = 'Dr. Maya Reyes'
 
 function dateKey(date: Date) {
@@ -170,9 +187,27 @@ function initialsFromName(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('')
 }
 
+function createQueueToken() {
+  const bytes = new Uint8Array(16)
+  if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes)
+  else bytes.forEach((_, index) => { bytes[index] = Math.floor(Math.random() * 256) })
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function queueLink(token: string) {
+  const url = new URL(window.location.pathname, window.location.origin)
+  url.searchParams.set('queue', token)
+  return url.toString()
+}
+
 function App() {
   const [patients, setPatients] = useState<Patient[]>(readStoredPatients)
   const [appointments, setAppointments] = useState<Appointment[]>(() => readStored(STORAGE_APPOINTMENTS, createSeedAppointments))
+  const [queueSession, setQueueSession] = useState<QueueSession | null>(() => {
+    const stored = readStored<QueueSession | null>(STORAGE_QUEUE, () => null)
+    return stored?.date === dateKey(new Date()) ? stored : null
+  })
+  const [queueScanToken, setQueueScanToken] = useState<string | null>(() => new URLSearchParams(window.location.search).get('queue'))
   const [page, setPage] = useState<Page>('dashboard')
   const [chartPatientId, setChartPatientId] = useState<string | null>(null)
   const [chartTab, setChartTab] = useState<ChartTab>('overview')
@@ -184,6 +219,30 @@ function App() {
 
   useEffect(() => localStorage.setItem(STORAGE_PATIENTS, JSON.stringify(patients)), [patients])
   useEffect(() => localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(appointments)), [appointments])
+  useEffect(() => {
+    if (queueSession?.date === dateKey(new Date())) localStorage.setItem(STORAGE_QUEUE, JSON.stringify(queueSession))
+    else localStorage.removeItem(STORAGE_QUEUE)
+  }, [queueSession])
+  useEffect(() => {
+    function syncQueue(event: StorageEvent) {
+      if (event.key !== STORAGE_QUEUE) return
+      try {
+        const next = event.newValue ? JSON.parse(event.newValue) as QueueSession : null
+        setQueueSession(next?.date === dateKey(new Date()) ? next : null)
+      } catch {
+        setQueueSession(null)
+      }
+    }
+    function syncCheckInRoute() {
+      setQueueScanToken(new URLSearchParams(window.location.search).get('queue'))
+    }
+    window.addEventListener('storage', syncQueue)
+    window.addEventListener('popstate', syncCheckInRoute)
+    return () => {
+      window.removeEventListener('storage', syncQueue)
+      window.removeEventListener('popstate', syncCheckInRoute)
+    }
+  }, [])
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -198,6 +257,7 @@ function App() {
   const todayAppointments = useMemo(() => appointments
     .filter((appointment) => appointment.date === dateKey(new Date()) && appointment.status !== 'cancelled')
     .sort((a, b) => a.time.localeCompare(b.time)), [appointments])
+  const todayQueue = queueSession?.date === dateKey(new Date()) ? queueSession : null
   const chartPatient = patients.find((patient) => patient.id === chartPatientId) ?? null
   const searchResults = search.trim().length > 1
     ? patients.filter((patient) => `${patient.name} ${patient.patientNumber} ${patient.phone}`.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
@@ -255,6 +315,56 @@ function App() {
     return ''
   }
 
+  function generateDailyQueue() {
+    setQueueSession((current) => current?.date === dateKey(new Date())
+      ? { ...current, token: createQueueToken(), isOpen: true }
+      : { date: dateKey(new Date()), token: createQueueToken(), isOpen: true, entries: [] })
+  }
+
+  function joinQueue(token: string, details: { name: string; phone: string }) {
+    if (!todayQueue || !todayQueue.isOpen || todayQueue.token !== token) return null
+    const name = details.name.trim()
+    const phone = details.phone.trim()
+    const duplicate = todayQueue.entries.find((entry) => entry.status !== 'completed'
+      && entry.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+      && entry.phone.replace(/\D/g, '') === phone.replace(/\D/g, ''))
+    if (duplicate) return duplicate
+    const entry: QueueEntry = {
+      id: `q-${createQueueToken()}`,
+      number: String(todayQueue.entries.length + 1).padStart(3, '0'),
+      name,
+      phone,
+      joinedAt: new Date().toISOString(),
+      status: 'waiting',
+    }
+    setQueueSession((current) => current?.token === token ? { ...current, entries: [...current.entries, entry] } : current)
+    return entry
+  }
+
+  function updateQueueEntry(entryId: string, status: QueueEntry['status']) {
+    setQueueSession((current) => current ? {
+      ...current,
+      entries: current.entries.map((entry) => entry.id === entryId ? { ...entry, status } : entry),
+    } : current)
+  }
+
+  function toggleQueue() {
+    setQueueSession((current) => current ? { ...current, isOpen: !current.isOpen } : current)
+  }
+
+  function openQueueCheckIn() {
+    if (!todayQueue) return
+    window.history.pushState({}, '', queueLink(todayQueue.token))
+    setQueueScanToken(todayQueue.token)
+  }
+
+  function closeQueueCheckIn() {
+    const url = new URL(window.location.href)
+    url.searchParams.delete('queue')
+    window.history.replaceState({}, '', url)
+    setQueueScanToken(null)
+  }
+
   function createMedicalRecord(patient: Patient, record: Omit<MedicalRecord, 'id' | 'date'>) {
     const nextRecord = { ...record, id: `r-${Date.now()}`, date: dateKey(new Date()) }
     updatePatient(patient.id, { records: [nextRecord, ...patient.records], lastVisit: nextRecord.date })
@@ -272,7 +382,11 @@ function App() {
     setMobileNavOpen(false)
   }
 
-  const title = chartPatient ? 'Patient chart' : page === 'dashboard' ? 'Overview' : page === 'patients' ? 'Patients' : 'Appointments'
+  if (queueScanToken) {
+    return <QueueJoinPage token={queueScanToken} session={todayQueue} onJoin={joinQueue} onBack={closeQueueCheckIn} />
+  }
+
+  const title = chartPatient ? 'Patient chart' : page === 'dashboard' ? 'Overview' : page === 'patients' ? 'Patients' : page === 'appointments' ? 'Appointments' : 'Daily queue'
 
   return (
     <div className="app-shell">
@@ -287,6 +401,7 @@ function App() {
           <NavButton icon={<LayoutDashboard size={18} />} label="Overview" active={page === 'dashboard' && !chartPatient} onClick={() => navigate('dashboard')} />
           <NavButton icon={<Users size={18} />} label="Patients" active={page === 'patients' && !chartPatient} onClick={() => navigate('patients')} badge={String(patients.length)} />
           <NavButton icon={<CalendarDays size={18} />} label="Appointments" active={page === 'appointments'} onClick={() => navigate('appointments')} />
+          <NavButton icon={<QrCode size={18} />} label="Daily queue" active={page === 'queue'} onClick={() => navigate('queue')} badge={todayQueue ? String(todayQueue.entries.filter((entry) => entry.status === 'waiting').length) : undefined} />
         </nav>
         <div className="sidebar-label sidebar-label-spaced">CLINICAL</div>
         <nav className="primary-nav" aria-label="Clinical tools">
@@ -347,8 +462,16 @@ function App() {
             />
           ) : page === 'patients' ? (
             <PatientsPage patients={patients} onOpenPatient={openPatient} onNewPatient={() => setModal('walk-in')} />
-          ) : (
+          ) : page === 'appointments' ? (
             <AppointmentsPage appointments={appointments} patients={patients} onOpenPatient={openPatient} onNewAppointment={() => setModal('appointment')} />
+          ) : (
+            <DailyQueuePage
+              session={todayQueue}
+              onGenerate={generateDailyQueue}
+              onToggleQueue={toggleQueue}
+              onUpdateEntry={updateQueueEntry}
+              onPreviewCheckIn={openQueueCheckIn}
+            />
           )}
         </main>
         <footer className="page-footer"><span>Northstar Clinic workspace · Demo</span><span><span className="online-dot" />Demo data stays in this browser</span></footer>
@@ -359,6 +482,174 @@ function App() {
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
   )
+}
+
+function DailyQueuePage({ session, onGenerate, onToggleQueue, onUpdateEntry, onPreviewCheckIn }: {
+  session: QueueSession | null
+  onGenerate: () => void
+  onToggleQueue: () => void
+  onUpdateEntry: (entryId: string, status: QueueEntry['status']) => void
+  onPreviewCheckIn: () => void
+}) {
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [qrError, setQrError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const checkInUrl = session ? queueLink(session.token) : ''
+  const waiting = session?.entries.filter((entry) => entry.status === 'waiting') ?? []
+  const called = session?.entries.find((entry) => entry.status === 'called')
+  const completedCount = session?.entries.filter((entry) => entry.status === 'completed').length ?? 0
+  const nextWaiting = waiting[0]
+
+  useEffect(() => {
+    let cancelled = false
+    setQrDataUrl('')
+    setQrError('')
+    if (!checkInUrl) return
+    QRCode.toDataURL(checkInUrl, {
+      width: 240,
+      margin: 1,
+      errorCorrectionLevel: 'H',
+      color: { dark: '#163f43', light: '#ffffff' },
+    }).then((dataUrl) => {
+      if (!cancelled) setQrDataUrl(dataUrl)
+    }).catch(() => {
+      if (!cancelled) setQrError('The QR code could not be created. Try refreshing this page.')
+    })
+    return () => { cancelled = true }
+  }, [checkInUrl])
+
+  async function copyCheckInLink() {
+    try {
+      await navigator.clipboard.writeText(checkInUrl)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setQrError('Copy is unavailable in this browser. Print the QR code to share it.')
+    }
+  }
+
+  function callNext() {
+    if (!called && nextWaiting) onUpdateEntry(nextWaiting.id, 'called')
+  }
+
+  return <div className="page-wrap queue-page">
+    <div className="page-heading-row queue-heading-row">
+      <div><div className="eyebrow"><span className="eyebrow-dot" />{fullDate(dateKey(new Date()))}</div><h1>Daily patient queue</h1><p>Give walk-in patients a quick way to join today’s line.</p></div>
+      <span className={`queue-open-badge ${session?.isOpen ? 'queue-is-open' : ''}`}><i />{session ? (session.isOpen ? 'Accepting check-ins' : 'Check-in paused') : 'Not started'}</span>
+    </div>
+
+    <div className="queue-overview-grid">
+      <section className="surface queue-qr-card">
+        <div className="queue-qr-content">
+          <div className="section-kicker">PATIENT SELF CHECK-IN</div>
+          <h2>Today’s queue QR</h2>
+          <p>Display this code at the clinic entrance. Patients scan it, enter their name and phone number, and receive the next queue number.</p>
+          {!session ? <button className="button button-primary" onClick={onGenerate}><QrCode size={16} />Generate today’s QR</button> : <div className="queue-qr-actions">
+            <button className="button button-primary" onClick={onPreviewCheckIn}><QrCode size={15} />Preview patient check-in</button>
+            <button className="button button-secondary" onClick={() => window.print()}><Printer size={15} />Print QR</button>
+          </div>}
+          {session && <div className="queue-link-row"><span className="queue-link-lock"><ShieldCheck size={14} /></span><span><strong>Unique link for today</strong><small>{session.date} · The link stops working when the queue closes.</small></span><button className="icon-button subtle-icon" aria-label="Copy patient check-in link" onClick={copyCheckInLink}><Copy size={16} /></button></div>}
+          {copied && <small className="queue-copy-confirmation" role="status">Check-in link copied.</small>}
+          {qrError && <small className="form-error" role="alert">{qrError}</small>}
+          {session && <div className="queue-demo-note"><ShieldCheck size={15} /><span>This demo saves queue data in this browser. Patient phones need a shared server to send check-ins to the clinic.</span></div>}
+        </div>
+        <div className="queue-code-wrap">
+          {qrDataUrl ? <img className="queue-code-image" src={qrDataUrl} alt="QR code for today’s patient check-in" /> : <div className="queue-code-placeholder"><QrCode size={54} /><span>{session ? 'Preparing QR code…' : 'QR code appears here'}</span></div>}
+          {session && <span className="queue-code-caption">SCAN TO JOIN · {session.date}</span>}
+        </div>
+        <div id="print-daily-qr" className="print-daily-qr">
+          <div className="print-clinic"><span className="print-logo"><Activity size={18} /></span><span><strong>northstar</strong><small>Northstar Clinic · Patient check-in</small></span></div>
+          <div className="print-queue-date">{fullDate(session?.date ?? dateKey(new Date()))}</div>
+          {qrDataUrl && <img src={qrDataUrl} alt="Patient check-in QR code" />}
+          <h2>Scan to join today’s queue</h2>
+          <p>Enter your name and phone number to receive your queue number.</p>
+          <small>{checkInUrl}</small>
+        </div>
+      </section>
+
+      <section className="queue-summary-column" aria-label="Queue summary">
+        <div className="surface queue-summary-card"><span className="queue-summary-icon queue-summary-waiting"><Clock3 size={17} /></span><strong>{waiting.length}</strong><span>Waiting</span><small>Patients not yet called</small></div>
+        <div className="surface queue-summary-card"><span className="queue-summary-icon queue-summary-called"><UserRound size={17} /></span><strong>{called ? 1 : 0}</strong><span>Being seen</span><small>Currently called to the doctor</small></div>
+        <div className="surface queue-summary-card"><span className="queue-summary-icon queue-summary-complete"><Check size={17} /></span><strong>{completedCount}</strong><span>Completed</span><small>Visits finished today</small></div>
+      </section>
+    </div>
+
+    <section className="surface queue-list-card">
+      <div className="queue-list-heading"><div><div className="section-kicker">TODAY’S LINE</div><h2>Patient queue <span>{session?.entries.length ?? 0}</span></h2></div><div className="queue-list-actions">
+        {session && <button className="button button-secondary" onClick={onToggleQueue}>{session.isOpen ? 'Pause check-in' : 'Reopen check-in'}</button>}
+        <button className="button button-primary" onClick={callNext} disabled={!nextWaiting || Boolean(called)}><ArrowRight size={15} />Call next</button>
+      </div></div>
+      {session?.entries.length ? <div className="queue-table">
+        <div className="queue-table-header"><span>NUMBER</span><span>PATIENT</span><span>JOINED</span><span>STATUS</span><span>ACTION</span></div>
+        {session.entries.map((entry) => <div className="queue-table-row" key={entry.id}>
+          <strong className="queue-number">{entry.number}</strong>
+          <span className="queue-patient-cell"><strong>{entry.name}</strong><small>{entry.phone}</small></span>
+          <span className="queue-joined-time">{new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(entry.joinedAt))}</span>
+          <span className={`queue-entry-status queue-status-${entry.status}`}><i />{entry.status === 'waiting' ? 'Waiting' : entry.status === 'called' ? 'Called' : 'Completed'}</span>
+          <span className="queue-entry-action">{entry.status === 'called' ? <button onClick={() => onUpdateEntry(entry.id, 'completed')}><Check size={14} />Mark seen</button> : entry.status === 'waiting' ? <button disabled={Boolean(called)} onClick={() => onUpdateEntry(entry.id, 'called')}>Call patient</button> : <CheckCircle2 size={17} aria-label="Visit complete" />}</span>
+        </div>)}
+      </div> : <div className="queue-empty-state"><span><Users size={21} /></span><strong>No patients in line yet</strong><p>When a patient checks in with today’s QR, their number will appear here.</p>{session && <button className="text-button" onClick={onPreviewCheckIn}>Preview the patient check-in form <ArrowRight size={14} /></button>}</div>}
+    </section>
+  </div>
+}
+
+function QueueJoinPage({ token, session, onJoin, onBack }: {
+  token: string
+  session: QueueSession | null
+  onJoin: (token: string, details: { name: string; phone: string }) => QueueEntry | null
+  onBack: () => void
+}) {
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [receipt, setReceipt] = useState<QueueEntry | null>(null)
+  const [error, setError] = useState('')
+  const isValidSession = session?.token === token
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!isValidSession || !session?.isOpen) {
+      setError('This clinic queue is no longer accepting check-ins.')
+      return
+    }
+    if (!name.trim() || !phone.trim() || !/\d/.test(phone)) {
+      setError('Enter your full name and a phone number with at least one digit.')
+      return
+    }
+    const joined = onJoin(token, { name, phone })
+    if (!joined) {
+      setError('This clinic queue is no longer accepting check-ins.')
+      return
+    }
+    setReceipt(joined)
+    setError('')
+  }
+
+  return <main className="queue-checkin-shell">
+    <header className="queue-checkin-brand"><span className="brand-mark"><Activity size={19} strokeWidth={2.5} /></span><span className="brand-copy"><strong>northstar</strong><small>CLINIC WORKSPACE</small></span></header>
+    <section className="surface queue-checkin-card">
+      <div className="queue-checkin-icon"><QrCode size={20} /></div>
+      <div className="section-kicker">PATIENT SELF CHECK-IN</div>
+      <h1>{receipt ? 'You’re in the queue' : 'Join today’s queue'}</h1>
+      <p className="queue-checkin-intro">{fullDate(dateKey(new Date()))} · {clinicianName}</p>
+      {receipt ? <div className="queue-ticket" role="status">
+        <span>Your queue number</span><strong>{receipt.number}</strong><small>Please keep this screen open and listen for your number.</small>
+        <div className="queue-ticket-person"><span>{receipt.name}</span><span>Checked in at {new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(receipt.joinedAt))}</span></div>
+      </div> : !isValidSession ? <div className="queue-unavailable" role="alert">
+        <span><Clock3 size={18} /></span><strong>This check-in link isn’t connected</strong><p>This demo stores queue entries in the browser that created the QR. Use the clinic’s preview on that browser; patient phones need a shared server to join the same queue.</p>
+      </div> : !session?.isOpen ? <div className="queue-unavailable" role="status">
+        <span><Clock3 size={18} /></span><strong>Check-in is paused</strong><p>The clinic has paused today’s queue. Please ask the receptionist for help.</p>
+      </div> : <form className="queue-checkin-form" onSubmit={submit}>
+        <p>Enter your details to receive your number. Please submit only once.</p>
+        <Field label="Full name" required><input autoComplete="name" maxLength={160} required value={name} onChange={(event) => setName(event.target.value)} placeholder="Your first and last name" /></Field>
+        <Field label="Phone number" required><input autoComplete="tel" type="tel" maxLength={32} required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Your phone number" /></Field>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="queue-checkin-note"><ShieldCheck size={15} /><span>Your details are used to manage today’s line and aren’t added to a medical chart.</span></div>
+        <button className="button button-primary" type="submit"><QrCode size={16} />Get my queue number</button>
+      </form>}
+      <button className="queue-back-link" onClick={onBack}><ArrowLeft size={14} />Back to clinic</button>
+    </section>
+    <p className="queue-checkin-footer">Northstar Clinic · Demo check-in</p>
+  </main>
 }
 
 function NavButton({ icon, label, active, onClick, badge }: { icon: ReactNode; label: string; active?: boolean; onClick: () => void; badge?: string }) {
