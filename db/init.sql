@@ -47,6 +47,8 @@ CREATE TABLE appointments (
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Enables a visit to reference the appointment and its patient together.
+    CONSTRAINT appointments_id_patient_unique UNIQUE (id, patient_id),
     CONSTRAINT appointments_valid_status CHECK (
         status IN ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')
     ),
@@ -61,7 +63,7 @@ CREATE TABLE appointments (
 CREATE TABLE visits (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
-    appointment_id UUID UNIQUE REFERENCES appointments(id) ON DELETE SET NULL,
+    appointment_id UUID UNIQUE,
     attendant_id UUID REFERENCES users(id) ON DELETE SET NULL,
     doctor_id UUID REFERENCES users(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'in_triage',
@@ -87,7 +89,17 @@ CREATE TABLE visits (
     ),
     CONSTRAINT visits_positive_weight CHECK (weight_kg IS NULL OR weight_kg > 0),
     CONSTRAINT visits_valid_temperature CHECK (temperature_c IS NULL OR temperature_c BETWEEN 25 AND 45),
-    CONSTRAINT visits_queue_timestamp CHECK (status NOT IN ('waiting', 'in_progress', 'completed') OR queued_at IS NOT NULL)
+    CONSTRAINT visits_queue_timestamp CHECK (status NOT IN ('waiting', 'in_progress', 'completed') OR queued_at IS NOT NULL),
+    CONSTRAINT visits_start_timestamp CHECK (status NOT IN ('in_progress', 'completed') OR started_at IS NOT NULL),
+    CONSTRAINT visits_completion_timestamp CHECK (status <> 'completed' OR completed_at IS NOT NULL),
+    CONSTRAINT visits_timestamp_order CHECK (
+        (started_at IS NULL OR (queued_at IS NOT NULL AND started_at >= queued_at))
+        AND (completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at))
+    ),
+    -- Deleting a booking preserves its patient's visit; changing the booking's
+    -- patient is rejected once the encounter references it.
+    CONSTRAINT visits_appointment_patient_fk FOREIGN KEY (appointment_id, patient_id)
+        REFERENCES appointments (id, patient_id) ON DELETE SET NULL (appointment_id)
 );
 
 CREATE TABLE prescriptions (

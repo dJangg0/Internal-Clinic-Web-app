@@ -12,7 +12,7 @@ For the full local stack:
 
 For running only the frontend without Docker:
 
-- Node.js `22.12+` and npm (Vite also supports Node.js `20.19+`)
+- Node.js `22.22.2+` in the Node 22 line, Node.js `24.15+` in the Node 24 line, or Node.js `26+`, and npm (see `frontend/package.json`)
 
 Install Git from [git-scm.com](https://git-scm.com/downloads), Node.js from [nodejs.org](https://nodejs.org/en/download), or Docker Desktop from [docker.com](https://www.docker.com/products/docker-desktop/). Check the installations with:
 
@@ -75,10 +75,38 @@ npm run build
 npm run preview
 ```
 
+## Requirements and workflow
+
+The [software requirements specification](docs/SRS.md) defines the proposed walk-in workflow: reception confirms or registers a patient, records triage, queues the visit for the doctor, and retains the consultation and prescriptions in the patient history. It includes requirement IDs, acceptance scenarios, and a matrix showing which behaviors exist in the demo, which are represented only in SQL, and which need backend implementation.
+
+## Tests and CI/CD
+
+Run the frontend checks:
+
+```sh
+cd frontend
+npm ci
+npm run test:coverage
+npx playwright install chromium
+npm run test:e2e
+```
+
+The browser suite builds and type-checks the app, then tests desktop and mobile Chromium against a production preview. From the repository root, test the disposable development stack and production image with Docker:
+
+```sh
+sh scripts/test-stack.sh
+sh scripts/test-image.sh
+```
+
+GitHub Actions validates the workflow/scripts, runs unit/component/browser tests, checks PostgreSQL constraints on a fresh database, and smoke-tests the production image. After all checks pass on a `main` push, it publishes that tested demo image to `ghcr.io/<owner>/<repository>/frontend` with the commit SHA and `main` tags. No live application deployment is configured.
+
+See [testing and delivery](docs/TESTING.md) for commands, reports, CI jobs, and the review–resolve–iterate process. Configure repository branch protection to require the CI checks before merging.
+
 ## Current demo limitations
 
 - The backend container is a placeholder and does not provide an API yet. PostgreSQL and Redis start for local development, but the frontend does not use them.
 - Patient, appointment, and queue demo data is stored in browser `localStorage`. Queue check-ins do not synchronize between different browsers or devices.
 - `db/init.sql` runs when Docker creates a new, empty PostgreSQL data volume. Existing volumes are not reinitialized on subsequent starts.
+- Authentication, enforced staff roles, server-backed triage/visit transitions, and audit history remain planned. A queue ticket marked seen does not finalize a clinical encounter.
 
 Do not use real patient data or production credentials in this demo.
