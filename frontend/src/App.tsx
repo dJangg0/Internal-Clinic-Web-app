@@ -34,83 +34,21 @@ import {
   X,
 } from 'lucide-react'
 import QRCode from 'qrcode'
+import {
+  ageFromBirthDate, dateKey, hasAppointmentConflict, isStoredAppointments,
+  isQueueSession, parseStoredPatients, readStored, saveStored,
+  type AllergyStatus, type Patient, type MedicalRecord, type Prescription,
+  type Appointment, type QueueEntry, type QueueSession,
+} from './clinic'
 
 type Page = 'dashboard' | 'patients' | 'appointments' | 'queue'
 type ChartTab = 'overview' | 'visit' | 'history' | 'prescriptions'
-type AllergyStatus = 'unknown' | 'none' | 'known'
-type Patient = {
-  id: string
-  name: string
-  initials: string
-  birthDate: string
-  sex: string
-  phone: string
-  email: string
-  patientNumber: string
-  joined: string
-  allergy: string
-  allergyStatus: AllergyStatus
-  lastVisit: string
-  notes: string
-  records: MedicalRecord[]
-  prescriptions: Prescription[]
-}
-type MedicalRecord = { id: string; date: string; signs: string; symptoms: string; diagnosis: string }
-type Prescription = {
-  id: string
-  date: string
-  medication: string
-  strength: string
-  instructions: string
-  duration: string
-  notes: string
-}
-type Appointment = {
-  id: string
-  patientId: string
-  date: string
-  time: string
-  duration: number
-  reason: string
-  status: 'scheduled' | 'confirmed' | 'checked_in' | 'completed' | 'cancelled'
-  clinician: string
-}
-type QueueEntry = {
-  id: string
-  number: string
-  name: string
-  phone: string
-  joinedAt: string
-  status: 'waiting' | 'called' | 'completed'
-}
-type QueueSession = {
-  date: string
-  token: string
-  isOpen: boolean
-  entries: QueueEntry[]
-}
 type ModalName = 'walk-in' | 'appointment' | null
 
 const STORAGE_PATIENTS = 'northstar-demo-patients-v1'
 const STORAGE_APPOINTMENTS = 'northstar-demo-appointments-v1'
 const STORAGE_QUEUE = 'northstar-demo-daily-queue-v1'
 const clinicianName = 'Dr. Maya Reyes'
-
-function dateKey(date: Date) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function ageFromBirthDate(birthDate: string) {
-  if (!birthDate) return null
-  const birth = new Date(`${birthDate}T00:00:00`)
-  const today = new Date()
-  let age = today.getFullYear() - birth.getFullYear()
-  if (today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age--
-  return Math.max(0, age)
-}
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(`${value}T12:00:00`))
@@ -165,29 +103,16 @@ function createSeedAppointments(): Appointment[] {
   ]
 }
 
-function readStored<T>(key: string, fallback: () => T): T {
-  try {
-    const value = localStorage.getItem(key)
-    return value ? JSON.parse(value) as T : fallback()
-  } catch {
-    return fallback()
-  }
-}
-
 function readStoredPatients(): Patient[] {
-  const stored = readStored<(Patient & { gender?: string; allergyStatus?: AllergyStatus })[]>(STORAGE_PATIENTS, createSeedPatients)
-  return stored.map((patient) => ({
-    ...patient,
-    sex: patient.sex ?? patient.gender ?? '',
-    allergyStatus: patient.allergyStatus ?? (patient.allergy === 'No known allergies' ? 'none' : patient.allergy === 'Not recorded' ? 'unknown' : 'known'),
-  }))
+  const stored = readStored<unknown>(STORAGE_PATIENTS, createSeedPatients, () => true)
+  return parseStoredPatients(stored) ?? createSeedPatients()
 }
 
 function initialsFromName(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('')
 }
 
-function createQueueToken() {
+function createRandomToken() {
   const bytes = new Uint8Array(16)
   if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes)
   else bytes.forEach((_, index) => { bytes[index] = Math.floor(Math.random() * 256) })
@@ -202,9 +127,9 @@ function queueLink(token: string) {
 
 function App() {
   const [patients, setPatients] = useState<Patient[]>(readStoredPatients)
-  const [appointments, setAppointments] = useState<Appointment[]>(() => readStored(STORAGE_APPOINTMENTS, createSeedAppointments))
+  const [appointments, setAppointments] = useState<Appointment[]>(() => readStored(STORAGE_APPOINTMENTS, createSeedAppointments, isStoredAppointments))
   const [queueSession, setQueueSession] = useState<QueueSession | null>(() => {
-    const stored = readStored<QueueSession | null>(STORAGE_QUEUE, () => null)
+    const stored = readStored<QueueSession | null>(STORAGE_QUEUE, () => null, (value): value is QueueSession | null => value === null || isQueueSession(value))
     return stored?.date === dateKey(new Date()) ? stored : null
   })
   const [queueScanToken, setQueueScanToken] = useState<string | null>(() => new URLSearchParams(window.location.search).get('queue'))
@@ -214,21 +139,26 @@ function App() {
   const [modal, setModal] = useState<ModalName>(null)
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState('')
+  const [storageFailed, setStorageFailed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => localStorage.setItem(STORAGE_PATIENTS, JSON.stringify(patients)), [patients])
-  useEffect(() => localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(appointments)), [appointments])
   useEffect(() => {
-    if (queueSession?.date === dateKey(new Date())) localStorage.setItem(STORAGE_QUEUE, JSON.stringify(queueSession))
-    else localStorage.removeItem(STORAGE_QUEUE)
+    if (!saveStored(STORAGE_PATIENTS, patients)) setStorageFailed(true)
+  }, [patients])
+  useEffect(() => {
+    if (!saveStored(STORAGE_APPOINTMENTS, appointments)) setStorageFailed(true)
+  }, [appointments])
+  useEffect(() => {
+    const current = queueSession?.date === dateKey(new Date()) ? queueSession : null
+    if (!saveStored(STORAGE_QUEUE, current)) setStorageFailed(true)
   }, [queueSession])
   useEffect(() => {
     function syncQueue(event: StorageEvent) {
       if (event.key !== STORAGE_QUEUE) return
       try {
         const next = event.newValue ? JSON.parse(event.newValue) as QueueSession : null
-        setQueueSession(next?.date === dateKey(new Date()) ? next : null)
+        setQueueSession(isQueueSession(next) && next.date === dateKey(new Date()) ? next : null)
       } catch {
         setQueueSession(null)
       }
@@ -260,7 +190,7 @@ function App() {
   const todayQueue = queueSession?.date === dateKey(new Date()) ? queueSession : null
   const chartPatient = patients.find((patient) => patient.id === chartPatientId) ?? null
   const searchResults = search.trim().length > 1
-    ? patients.filter((patient) => `${patient.name} ${patient.patientNumber} ${patient.phone}`.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
+    ? patients.filter((patient) => `${patient.name} ${patient.patientNumber} ${patient.phone}`.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 5)
     : []
 
   function notify(message: string) {
@@ -283,7 +213,7 @@ function App() {
   function addPatient(values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) {
     const patient: Patient = {
       ...values,
-      id: `p-${Date.now()}`,
+      id: `p-${createRandomToken()}`,
       initials: initialsFromName(values.name),
       patientNumber: `PT-${String(10500 + patients.length).padStart(5, '0')}`,
       joined: dateKey(new Date()),
@@ -299,15 +229,9 @@ function App() {
   }
 
   function addAppointment(values: Omit<Appointment, 'id' | 'clinician'>) {
-    const start = toMinutes(values.time)
-    const end = start + values.duration
-    const overlaps = appointments.some((appointment) => {
-      if (appointment.date !== values.date || !['scheduled', 'confirmed', 'checked_in'].includes(appointment.status)) return false
-      const otherStart = toMinutes(appointment.time)
-      return start < otherStart + appointment.duration && end > otherStart
-    })
+    const overlaps = hasAppointmentConflict(values, appointments)
     if (overlaps) return 'That time overlaps an existing appointment. Choose another slot.'
-    setAppointments((current) => [...current, { ...values, id: `a-${Date.now()}`, clinician: clinicianName }])
+    setAppointments((current) => [...current, { ...values, id: `a-${createRandomToken()}`, clinician: clinicianName }])
     setModal(null)
     setPage('appointments')
     setChartPatientId(null)
@@ -317,12 +241,12 @@ function App() {
 
   function generateDailyQueue() {
     setQueueSession((current) => current?.date === dateKey(new Date())
-      ? { ...current, token: createQueueToken(), isOpen: true }
-      : { date: dateKey(new Date()), token: createQueueToken(), isOpen: true, entries: [] })
+      ? { ...current, token: createRandomToken(), isOpen: true }
+      : { date: dateKey(new Date()), token: createRandomToken(), isOpen: true, entries: [] })
   }
 
   function joinQueue(token: string, details: { name: string; phone: string }) {
-    if (!todayQueue || !todayQueue.isOpen || todayQueue.token !== token) return null
+    if (!todayQueue || todayQueue.date !== dateKey(new Date()) || !todayQueue.isOpen || todayQueue.token !== token) return null
     const name = details.name.trim()
     const phone = details.phone.trim()
     const duplicate = todayQueue.entries.find((entry) => entry.status !== 'completed'
@@ -330,7 +254,7 @@ function App() {
       && entry.phone.replace(/\D/g, '') === phone.replace(/\D/g, ''))
     if (duplicate) return duplicate
     const entry: QueueEntry = {
-      id: `q-${createQueueToken()}`,
+      id: `q-${createRandomToken()}`,
       number: String(todayQueue.entries.length + 1).padStart(3, '0'),
       name,
       phone,
@@ -366,13 +290,13 @@ function App() {
   }
 
   function createMedicalRecord(patient: Patient, record: Omit<MedicalRecord, 'id' | 'date'>) {
-    const nextRecord = { ...record, id: `r-${Date.now()}`, date: dateKey(new Date()) }
-    updatePatient(patient.id, { records: [nextRecord, ...patient.records], lastVisit: nextRecord.date })
+    const nextRecord = { ...record, id: `r-${createRandomToken()}`, date: dateKey(new Date()) }
+    updatePatient(patient.id, { records: [nextRecord, ...patient.records], lastVisit: nextRecord.date, notes: '' })
     notify('Visit summary saved to the patient history.')
   }
 
   function createPrescription(patient: Patient, prescription: Omit<Prescription, 'id' | 'date'>) {
-    updatePatient(patient.id, { prescriptions: [{ ...prescription, id: `rx-${Date.now()}`, date: dateKey(new Date()) }, ...patient.prescriptions] })
+    updatePatient(patient.id, { prescriptions: [{ ...prescription, id: `rx-${createRandomToken()}`, date: dateKey(new Date()) }, ...patient.prescriptions] })
     notify('Prescription added to the chart.')
   }
 
@@ -383,7 +307,7 @@ function App() {
   }
 
   if (queueScanToken) {
-    return <QueueJoinPage token={queueScanToken} session={todayQueue} onJoin={joinQueue} onBack={closeQueueCheckIn} />
+    return <QueueJoinPage token={queueScanToken} session={todayQueue} storageFailed={storageFailed} onJoin={joinQueue} onBack={closeQueueCheckIn} />
   }
 
   const title = chartPatient ? 'Patient chart' : page === 'dashboard' ? 'Overview' : page === 'patients' ? 'Patients' : page === 'appointments' ? 'Appointments' : 'Daily queue'
@@ -440,6 +364,7 @@ function App() {
         <main className="main-content">
           {chartPatient ? (
             <PatientChart
+              key={chartPatient.id}
               patient={chartPatient}
               tab={chartTab}
               onTabChange={setChartTab}
@@ -474,11 +399,12 @@ function App() {
             />
           )}
         </main>
+        {storageFailed && <StorageWarning />}
         <footer className="page-footer"><span>Northstar Clinic workspace · Demo</span><span><span className="online-dot" />Demo data stays in this browser</span></footer>
       </div>
 
       {modal === 'walk-in' && <WalkInModal onClose={() => setModal(null)} onCreate={addPatient} />}
-      {modal === 'appointment' && <AppointmentModal patients={patients} onClose={() => setModal(null)} onCreate={addAppointment} />}
+      {modal === 'appointment' && <AppointmentModal patients={patients} initialPatientId={chartPatientId ?? undefined} onClose={() => setModal(null)} onCreate={addAppointment} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
   )
@@ -593,9 +519,14 @@ function DailyQueuePage({ session, onGenerate, onToggleQueue, onUpdateEntry, onP
   </div>
 }
 
-function QueueJoinPage({ token, session, onJoin, onBack }: {
+function StorageWarning() {
+  return <p className="form-error" role="alert">Browser storage is unavailable. Changes may be lost when you reload.</p>
+}
+
+function QueueJoinPage({ token, session, storageFailed, onJoin, onBack }: {
   token: string
   session: QueueSession | null
+  storageFailed: boolean
   onJoin: (token: string, details: { name: string; phone: string }) => QueueEntry | null
   onBack: () => void
 }) {
@@ -603,7 +534,7 @@ function QueueJoinPage({ token, session, onJoin, onBack }: {
   const [phone, setPhone] = useState('')
   const [receipt, setReceipt] = useState<QueueEntry | null>(null)
   const [error, setError] = useState('')
-  const isValidSession = session?.token === token
+  const isValidSession = session?.token === token && session.date === dateKey(new Date())
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -631,6 +562,7 @@ function QueueJoinPage({ token, session, onJoin, onBack }: {
       <div className="section-kicker">PATIENT SELF CHECK-IN</div>
       <h1>{receipt ? 'You’re in the queue' : 'Join today’s queue'}</h1>
       <p className="queue-checkin-intro">{fullDate(dateKey(new Date()))} · {clinicianName}</p>
+      {storageFailed && <StorageWarning />}
       {receipt ? <div className="queue-ticket" role="status">
         <span>Your queue number</span><strong>{receipt.number}</strong><small>Please keep this screen open and listen for your number.</small>
         <div className="queue-ticket-person"><span>{receipt.name}</span><span>Checked in at {new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(receipt.joinedAt))}</span></div>
@@ -894,7 +826,7 @@ function PatientChart({ patient, tab, onTabChange, onBack, onUpdate, onAddRecord
       onToast('Add a note, signs, symptoms, or diagnosis before saving.')
       return
     }
-    onAddRecord({ signs: signs.trim(), symptoms: symptoms.trim(), diagnosis: diagnosis.trim() })
+    onAddRecord({ signs: signs.trim(), symptoms: symptoms.trim(), diagnosis: diagnosis.trim(), notes: patient.notes.trim() })
     setSigns(''); setSymptoms(''); setDiagnosis('')
     onTabChange('history')
   }
@@ -904,7 +836,7 @@ function PatientChart({ patient, tab, onTabChange, onBack, onUpdate, onAddRecord
     if (!rxForm.medication.trim()) return
     const prescription = { ...rxForm, medication: rxForm.medication.trim() }
     onAddPrescription(prescription)
-    setSavedRx({ ...prescription, id: `preview-${Date.now()}`, date: dateKey(new Date()) })
+    setSavedRx({ ...prescription, id: `preview-${createRandomToken()}`, date: dateKey(new Date()) })
     setRxForm({ medication: '', strength: '', instructions: '', duration: '', notes: '' })
   }
 
@@ -965,7 +897,7 @@ function InfoBlock({ label, value, alert }: { label: string; value: string; aler
 }
 
 function RecordSummary({ record }: { record: MedicalRecord }) {
-  return <div className="record-summary"><div className="record-summary-title"><span className="record-icon"><Stethoscope size={16} /></span><strong>{record.diagnosis || 'Visit note'}</strong><span className="record-visit-label">Visit</span></div><div className="record-details">{record.signs && <div><span>Signs</span><p>{record.signs}</p></div>}{record.symptoms && <div><span>Symptoms</span><p>{record.symptoms}</p></div>}{!record.signs && !record.symptoms && <p className="muted-copy">No signs or symptoms recorded.</p>}</div></div>
+  return <div className="record-summary"><div className="record-summary-title"><span className="record-icon"><Stethoscope size={16} /></span><strong>{record.diagnosis || 'Visit note'}</strong><span className="record-visit-label">Visit</span></div><div className="record-details">{record.signs && <div><span>Signs</span><p>{record.signs}</p></div>}{record.symptoms && <div><span>Symptoms</span><p>{record.symptoms}</p></div>}{record.notes && <div><span>Interview notes</span><p>{record.notes}</p></div>}{!record.signs && !record.symptoms && !record.notes && <p className="muted-copy">No signs or symptoms recorded.</p>}</div></div>
 }
 
 function PrescriptionPrint({ prescription, patient }: { prescription: Prescription; patient: Patient }) {
@@ -1081,8 +1013,8 @@ function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (va
   </Modal>
 }
 
-function AppointmentModal({ patients, onClose, onCreate }: { patients: Patient[]; onClose: () => void; onCreate: (values: Omit<Appointment, 'id' | 'clinician'>) => string }) {
-  const [form, setForm] = useState({ patientId: patients[0]?.id ?? '', date: dateKey(new Date()), time: '11:00', duration: 30, reason: '' })
+function AppointmentModal({ patients, initialPatientId, onClose, onCreate }: { patients: Patient[]; initialPatientId?: string; onClose: () => void; onCreate: (values: Omit<Appointment, 'id' | 'clinician'>) => string }) {
+  const [form, setForm] = useState({ patientId: initialPatientId ?? patients[0]?.id ?? '', date: dateKey(new Date()), time: '11:00', duration: 30, reason: '' })
   const [error, setError] = useState('')
   function updateForm(update: Partial<typeof form>) {
     setForm((current) => ({ ...current, ...update }))
@@ -1095,7 +1027,7 @@ function AppointmentModal({ patients, onClose, onCreate }: { patients: Patient[]
     if (message) setError(message)
   }
   return <Modal onClose={onClose} eyebrow="SCHEDULING" title="Book an appointment" subtitle="Choose a patient and a time that works for the clinic." icon={<CalendarPlus size={18} />}>
-    <form onSubmit={submit} className="modal-form"><Field label="Patient" required><select id="appointment-patient" required value={form.patientId} onChange={(event) => updateForm({ patientId: event.target.value })}><option value="" disabled>Select a patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name} · {patient.patientNumber}</option>)}</select></Field><div className="form-row"><Field label="Date" required><input id="appointment-date" type="date" required min={dateKey(new Date())} value={form.date} onChange={(event) => updateForm({ date: event.target.value })} /></Field><Field label="Start time" required><select id="appointment-time" value={form.time} onChange={(event) => updateForm({ time: event.target.value })}>{Array.from({ length: 20 }, (_, index) => { const mins = 8 * 60 + index * 30; const time = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`; return <option key={time} value={time}>{formatTime(time)}</option> })}</select></Field></div><div className="form-row"><Field label="Visit length"><select id="appointment-duration" value={form.duration} onChange={(event) => updateForm({ duration: Number(event.target.value) })}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></Field><Field label="Visit type"><input value={form.reason} onChange={(event) => updateForm({ reason: event.target.value })} placeholder="e.g. Follow-up" /></Field></div><div className="modal-clinician"><span className="avatar avatar-teal avatar-small">MR</span><span><small>Assigned clinician</small><strong>{clinicianName}</strong></span><CheckCircle2 size={16} /></div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary"><CalendarPlus size={15} />Confirm appointment</button></div></form>
+    <form onSubmit={submit} className="modal-form"><Field label="Patient" required><select id="appointment-patient" required value={form.patientId} onChange={(event) => updateForm({ patientId: event.target.value })}><option value="" disabled>Select a patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name} · {patient.patientNumber}</option>)}</select></Field><div className="form-row"><Field label="Date" required><input id="appointment-date" type="date" required min={dateKey(new Date())} value={form.date} onChange={(event) => updateForm({ date: event.target.value })} /></Field><Field label="Start time" required><select id="appointment-time" value={form.time} onChange={(event) => updateForm({ time: event.target.value })}>{Array.from({ length: 20 }, (_, index) => { const mins = 8 * 60 + index * 30; const time = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`; return <option key={time} value={time}>{formatTime(time)}</option> })}</select></Field></div><div className="form-row"><Field label="Visit length"><select id="appointment-duration" value={form.duration} onChange={(event) => updateForm({ duration: Number(event.target.value) })}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></Field><Field label="Visit type"><input value={form.reason} onChange={(event) => updateForm({ reason: event.target.value })} placeholder="e.g. Follow-up" /></Field></div><div className="modal-clinician"><span className="avatar avatar-teal avatar-small">MR</span><span><small>Assigned clinician</small><strong>{clinicianName}</strong></span><CheckCircle2 size={16} /></div>{error && <p className="form-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary"><CalendarPlus size={15} />Confirm appointment</button></div></form>
   </Modal>
 }
 
