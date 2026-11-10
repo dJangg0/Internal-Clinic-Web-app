@@ -2,6 +2,12 @@
 
 The test suite covers the current browser demo, PostgreSQL integrity, the local development stack, and the built frontend artifact. Read the [SRS](SRS.md) for intended requirements and the distinction between implemented and planned behavior.
 
+## Required testing policy
+
+The root [AGENTS.md](../AGENTS.md) applies across the repository. Every new feature or behavior change must include meaningful unit tests, and every bug fix must include a regression test that fails without the fix. Cover relevant boundaries, invalid inputs, failures, and state transitions; add component/integration, browser, or PostgreSQL tests when the affected behavior requires them. Do not skip or weaken tests, assertions, coverage thresholds, or CI checks to make a change pass.
+
+This document is the source of check commands and prerequisites. Documentation-only changes need documentation/diff checks, not runtime tests or placeholder test cases. Report unavailable checks as unverified, with the missing prerequisite.
+
 ## Run the checks
 
 Use Node.js 22.22.2 or later in the Node 22 line, Node.js 24.15 or later in the Node 24 line, or Node.js 26+, matching `frontend/package.json`. Docker tests require a running Docker engine and Docker Compose v2.
