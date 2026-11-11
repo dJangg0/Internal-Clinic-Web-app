@@ -81,6 +81,8 @@ The [software requirements specification](docs/SRS.md) defines the proposed walk
 
 ## Tests and CI/CD
 
+Contributions must follow the repository-wide [testing policy in AGENTS.md](AGENTS.md): every new feature or behavior change includes meaningful unit tests, and every bug fix includes a regression test. Documentation-only changes do not require runtime tests. [Testing and delivery](docs/TESTING.md) provides the check commands and prerequisites.
+
 Run the frontend checks:
 
 ```sh
