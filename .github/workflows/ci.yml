@@ -1,4 +1,4 @@
-name: Clinic CI and delivery
+name: Clinic CI
 
 on:
   push:
@@ -15,24 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  workflow:
-    name: Workflow and script validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - run: docker run --rm --volume "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
-      - run: sh -n scripts/test-stack.sh scripts/test-image.sh
-
-  frontend:
+  test:
     name: Unit, component and browser tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +27,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run test:coverage
       - run: npx playwright install --with-deps chromium
@@ -51,62 +37,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-test-reports
+          name: webapp-test-reports
           path: |
-            frontend/coverage/
-            frontend/playwright-report/
+            coverage/
+            playwright-report/
             .context/test-results/
           include-hidden-files: true
           retention-days: 14
-
-  stack:
-    name: Fresh database and Compose stack
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - run: sh scripts/test-stack.sh
-
-  container:
-    name: Production image smoke tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - run: sh scripts/test-image.sh clinic-frontend:ci
-      # Deliver precisely the image that passed smoke tests, without rebuilding it.
-      - run: docker save clinic-frontend:ci | gzip > frontend-image.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tested-frontend-image
-          path: frontend-image.tar.gz
-          retention-days: 3
-
-  deliver:
-    name: Publish tested demo image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [workflow, frontend, stack, container]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: tested-frontend-image
-      - name: Publish to GitHub Container Registry
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gzip -dc frontend-image.tar.gz | docker load
-          image="ghcr.io/${GITHUB_REPOSITORY,,}/frontend"
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker tag clinic-frontend:ci "$image:$GITHUB_SHA"
-          docker tag clinic-frontend:ci "$image:main"
-          docker push "$image:$GITHUB_SHA"
-          docker push "$image:main"

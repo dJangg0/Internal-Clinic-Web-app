@@ -5,7 +5,7 @@ const baseURL = externalURL || 'http://127.0.0.1:4173'
 
 export default defineConfig({
   testDir: './e2e',
-  outputDir: '../.context/test-results',
+  outputDir: '.context/test-results',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
