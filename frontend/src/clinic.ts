@@ -16,7 +16,7 @@ export type Patient = {
   records: MedicalRecord[]
   prescriptions: Prescription[]
 }
-export type MedicalRecord = { id: string; date: string; signs: string; symptoms: string; diagnosis: string; notes?: string }
+export type MedicalRecord = { id: string; date: string; signs: string; symptoms: string; diagnosis: string; notes?: string; encounterId?: string; triage?: QueueEntry['triage'] }
 export type Prescription = {
   id: string
   date: string
@@ -25,6 +25,7 @@ export type Prescription = {
   instructions: string
   duration: string
   notes: string
+  encounterId?: string
 }
 export type Appointment = {
   id: string
@@ -43,6 +44,11 @@ export type QueueEntry = {
   phone: string
   joinedAt: string
   status: 'waiting' | 'called' | 'completed'
+  patientId?: string
+  birthDate?: string
+  stage?: 'triage' | 'ready' | 'consulting' | 'complete'
+  triage?: { complaint: string; notes: string; bloodPressure: string; weight: string; temperature: string }
+  encounterId?: string
 }
 export type QueueSession = {
   date: string
