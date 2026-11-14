@@ -2,6 +2,11 @@
 
 These instructions apply throughout this repository. Read [docs/SRS.md](docs/SRS.md) for business rules and [docs/TESTING.md](docs/TESTING.md) for test commands, prerequisites, and current implementation limits.
 
+## Requirements tracking
+
+- Before feature work, check the SRS for existing requirements and implementation status. In the same change, update `docs/SRS.md` when a feature adds or changes a user workflow, actor, permission, business rule, or acceptance behavior. Keep its implementation status, acceptance scenarios, and test traceability accurate.
+- Do not change the SRS for internal refactors or bug fixes that restore behavior already specified there.
+
 ## Required tests for changes
 
 - Every new feature or application behavior change must include meaningful unit tests in the same change. Test new or changed business rules directly; use component tests for behavior expressed through React.
