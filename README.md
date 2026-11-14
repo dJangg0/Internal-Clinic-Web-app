@@ -103,6 +103,8 @@ These are public demo credentials, not real accounts. Doctor opens the clinical 
 
 The [software requirements specification](docs/SRS.md) defines the proposed walk-in workflow: reception confirms or registers a patient, records triage, queues the visit for the doctor, and retains the consultation and prescriptions in the patient history. It includes requirement IDs, acceptance scenarios, and a matrix showing which behaviors exist in the demo, which are represented only in SQL, and which need backend implementation.
 
+The [Philippines EHR deployment readiness plan](docs/DEPLOYMENT_READINESS.md) reviews current blockers, adds clinical and privacy standards as release criteria, and orders the work needed before the clinic can use real patient records.
+
 ## Tests and CI/CD
 
 Contributions must follow the repository-wide [testing policy in AGENTS.md](AGENTS.md): every new feature or behavior change includes meaningful unit tests, and every bug fix includes a regression test. Documentation-only changes do not require runtime tests. [Testing and delivery](docs/TESTING.md) provides the check commands and prerequisites.
