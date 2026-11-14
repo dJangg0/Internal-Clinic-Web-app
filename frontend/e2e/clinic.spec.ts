@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 const test = base.extend<{ runtimeErrors: void }>({
   runtimeErrors: [async ({ page }, use) => {
@@ -36,6 +37,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('walk-in registration, clinical history, prescription and appointment survive reload', async ({ page }) => {
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
   await page.getByRole('button', { name: 'New walk-in', exact: true }).click()
   const registration = page.getByRole('dialog', { name: 'New walk-in patient' })
   await registration.getByLabel(/^Patient name/).fill('Jamie Demo')
@@ -74,6 +76,7 @@ test('walk-in registration, clinical history, prescription and appointment survi
   await expect(page.locator('.upcoming-list')).toContainText('Demo follow-up')
 
   await page.reload()
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
   await openChart(page, 'Jamie Demo')
   await page.locator('.chart-tabs').getByRole('button', { name: /^Medical history/ }).click()
   await expect(page.getByText('Synthetic interview note for regression testing.', { exact: true })).toBeVisible()
@@ -84,6 +87,7 @@ test('walk-in registration, clinical history, prescription and appointment survi
 })
 
 test('chart scheduling selects its patient and conflicting appointments cannot be saved', async ({ page }) => {
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
   await openChart(page, 'Mateo Cruz')
   await page.getByRole('button', { name: 'Schedule', exact: true }).click()
   const appointment = page.getByRole('dialog', { name: 'Book an appointment' })
@@ -99,6 +103,7 @@ test('chart scheduling selects its patient and conflicting appointments cannot b
 })
 
 test('queue deduplicates check-ins, serves patients, persists and rejects unavailable links', async ({ page, browser }) => {
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
   await navigate(page, /^Daily queue/)
   await page.getByRole('button', { name: 'Generate today’s QR' }).click()
   await expect(page.getByRole('img', { name: 'QR code for today’s patient check-in', exact: true })).toBeVisible()
@@ -147,6 +152,7 @@ test('queue deduplicates check-ins, serves patients, persists and rejects unavai
   await expect(page.getByRole('button', { name: 'Get my queue number' })).toBeHidden()
   await page.getByRole('button', { name: 'Back to clinic' }).click()
   await page.reload()
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
   await navigate(page, /^Daily queue/)
   await expect(page.locator('.queue-table-row')).toContainText('Visit complete')
   await expect(page.getByRole('button', { name: 'Reopen check-in' })).toBeVisible()
@@ -164,4 +170,215 @@ test('queue deduplicates check-ins, serves patients, persists and rejects unavai
   }
   await page.goto('/?queue=invalid-token')
   await expect(page.getByRole('alert')).toContainText('This check-in link isn’t connected')
+})
+
+
+test('role sign-in forms validate and reject unknown credentials on desktop and mobile without retaining credentials', async ({ page }) => {
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole('heading', { name: 'Welcome back, doctor.' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeHidden()
+  const originalPatients = await page.evaluate(() => localStorage.getItem('northstar-demo-patients-v1'))
+  for (const [role, heading, submitRole] of [
+    ['Patient', 'Your care starts here.', 'Patient'],
+    ['Attendant / Secretary', 'A smoother day starts here.', 'Attendant'],
+    ['Doctor', 'Welcome back, doctor.', 'Doctor'],
+  ]) {
+    const roleButton = page.getByRole('button', { name: role, exact: true })
+    await roleButton.click()
+    await expect(roleButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    const email = page.getByLabel('Email address', { exact: true })
+    const password = page.getByLabel('Password', { exact: true })
+    await expect(email).toHaveValue('')
+    await expect(password).toHaveValue('')
+    await page.getByRole('button', { name: `Sign in as ${submitRole}` }).click()
+    await expect(email).toHaveAttribute('aria-invalid', 'true')
+    await expect(password).toHaveAttribute('aria-invalid', 'true')
+    await email.fill('not-an-email')
+    await password.fill('   ')
+    await password.press('Enter')
+    await expect(email).toHaveAttribute('aria-invalid', 'true')
+    await expect(password).toHaveAttribute('aria-invalid', 'true')
+    await email.fill('synthetic@example.test')
+    await password.fill('Synthetic-only-password')
+    await page.getByRole('button', { name: 'Show password' }).click()
+    await expect(password).toHaveAttribute('type', 'text')
+    await page.getByRole('button', { name: 'Hide password' }).click()
+    await expect(password).toHaveAttribute('type', 'password')
+    await password.press('Enter')
+    await expect(page.getByRole('alert')).toContainText('These demo credentials do not match the selected role')
+    await expect(password).toHaveValue('')
+    await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeHidden()
+    expect(await page.evaluate(() => {
+      const browserWindow = globalThis as unknown as { document: { documentElement: { scrollWidth: number } }; innerWidth: number }
+      return browserWindow.document.documentElement.scrollWidth <= browserWindow.innerWidth
+    })).toBe(true)
+  }
+  await page.getByRole('button', { name: 'Forgot password?' }).click()
+  await expect(page.getByRole('status')).toContainText(/not|unavailable|connect/i)
+  await page.getByRole('button', { name: 'Need access?' }).click()
+  await expect(page.getByRole('status')).toContainText(/clinic|administrator/i)
+  const storage = await page.evaluate(() => ({
+    patients: localStorage.getItem('northstar-demo-patients-v1'),
+    all: JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }),
+  }))
+  expect(storage.patients).toBe(originalPatients)
+  expect(storage.all).not.toContain('synthetic@example.test')
+  expect(storage.all).not.toContain('Synthetic-only-password')
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
+  await expect(page.getByRole('heading', { name: /Good morning, Maya/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Log in as' }).click()
+  await expect(page.getByRole('button', { name: 'Explore demo workspace' })).toBeVisible()
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('')
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Welcome back, doctor.' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeHidden()
+})
+
+
+test('wide desktop sign-in keeps the form offset over the loaded hero without horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 2560, height: 1440 })
+  await expect(page.getByRole('heading', { name: 'Welcome back, doctor.' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Change cover' })).toBeVisible()
+  const heroImage = page.locator('.login-hero-image')
+  await expect.poll(() => heroImage.evaluate((image) => {
+    const photo = image as unknown as { complete: boolean; naturalWidth: number }
+    return photo.complete && photo.naturalWidth > 0
+  })).toBe(true)
+  const form = await page.locator('.login-form').boundingBox()
+  const panel = await page.locator('.login-main').boundingBox()
+  const hero = await heroImage.boundingBox()
+  expect(form?.width).toBeGreaterThanOrEqual(360)
+  expect(panel).not.toBeNull()
+  expect(hero).not.toBeNull()
+  expect(panel!.x).toBeGreaterThan(hero!.x + hero!.width / 2)
+  expect(panel!.x + panel!.width).toBeLessThanOrEqual(hero!.x + hero!.width + 1)
+  expect(panel!.y).toBeGreaterThanOrEqual(hero!.y)
+  expect(panel!.y + panel!.height).toBeLessThanOrEqual(hero!.y + hero!.height + 1)
+  expect(await page.evaluate(() => {
+    const browserWindow = globalThis as unknown as { document: { documentElement: { scrollWidth: number } }; innerWidth: number }
+    return browserWindow.document.documentElement.scrollWidth <= browserWindow.innerWidth
+  })).toBe(true)
+})
+
+
+test('cover changes are local previews that survive role and demo navigation, reject corrupt images and reset', async ({ page }) => {
+  const hero = page.locator('.login-hero-image')
+  await expect(hero).toHaveAttribute('src', '/images/clinic-hero.jpg')
+  const originalStorage = await page.evaluate(() => JSON.stringify({ ...localStorage }))
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Change cover' }).click()
+  await (await chooser).setFiles({
+    name: 'synthetic-clinic-cover.jpg',
+    mimeType: 'image/jpeg',
+    buffer: await readFile(new URL('../public/images/clinic-hero.jpg', import.meta.url)),
+  })
+  await expect(page.getByRole('status')).toContainText('Cover updated')
+  await expect(hero).toHaveAttribute('src', /^blob:/)
+  const uploadedSource = await hero.getAttribute('src')
+  await expect(page.getByRole('button', { name: 'Reset cover' })).toBeVisible()
+  await page.getByRole('button', { name: 'Patient', exact: true }).click()
+  await expect(hero).toHaveAttribute('src', uploadedSource!)
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
+  await page.getByRole('button', { name: 'Log in as' }).click()
+  await expect(hero).toHaveAttribute('src', uploadedSource!)
+  await expect.poll(() => hero.evaluate((image) => {
+    const photo = image as unknown as { complete: boolean; naturalWidth: number }
+    return photo.complete && photo.naturalWidth > 0
+  })).toBe(true)
+  await page.getByLabel('Choose a cover image').setInputFiles({ name: 'corrupt.png', mimeType: 'image/png', buffer: Buffer.from('synthetic invalid image') })
+  await expect(page.getByRole('alert')).toContainText(/image|read|load/i)
+  await expect(hero).toHaveAttribute('src', uploadedSource!)
+  expect(await page.evaluate(() => JSON.stringify({ ...localStorage }))).toBe(originalStorage)
+  await page.getByRole('button', { name: 'Reset cover' }).click()
+  await expect(hero).toHaveAttribute('src', '/images/clinic-hero.jpg')
+  await expect(page.getByRole('button', { name: 'Reset cover' })).toBeHidden()
+  await page.getByLabel('Choose a cover image').setInputFiles('public/images/clinic-hero.jpg')
+  await expect(hero).toHaveAttribute('src', /^blob:/)
+  await page.reload()
+  await expect(hero).toHaveAttribute('src', '/images/clinic-hero.jpg')
+  await expect(page.getByRole('button', { name: 'Reset cover' })).toBeHidden()
+})
+
+
+test('all three published demo accounts open distinct role routes and login clears the session', async ({ page }) => {
+  const accounts = [
+    { role: 'Patient', label: 'Patient', email: 'patient@northstar.demo', password: 'PatientDemo123!', path: '/demo/patient', heading: 'Welcome, Sofia.' },
+    { role: 'Attendant', label: 'Attendant / Secretary', email: 'secretary@northstar.demo', password: 'StaffDemo123!', path: '/demo/attendant', heading: 'Reception workspace' },
+    { role: 'Doctor', label: 'Doctor', email: 'doctor@northstar.demo', password: 'DoctorDemo123!', path: '/demo/doctor', heading: /Good morning, Maya/ },
+  ]
+  await expect(page).toHaveURL(/\/login$/)
+  const originalPatients = await page.evaluate(() => localStorage.getItem('northstar-demo-patients-v1'))
+  for (const account of accounts) {
+    await page.getByRole('button', { name: account.label, exact: true }).click()
+    await page.getByText('Demo credentials', { exact: true }).click()
+    await expect(page.getByText(account.email, { exact: true })).toBeVisible()
+    await expect(page.getByText(account.password, { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Use demo credentials' }).click()
+    await expect(page.getByLabel('Email address', { exact: true })).toHaveValue(account.email)
+    await expect(page.getByLabel('Password', { exact: true })).toHaveValue(account.password)
+    await expect(page).toHaveURL(/\/login$/)
+    await page.getByRole('button', { name: `Sign in as ${account.role}` }).click()
+    await expect(page).toHaveURL(new RegExp(`${account.path}$`))
+    await expect(page.getByRole('heading', { name: account.heading })).toBeVisible()
+    if (account.role === 'Patient') {
+      await expect(page.getByRole('button', { name: 'Open patient check-in' })).toBeDisabled()
+      await expect(page.getByRole('button', { name: /New walk-in|Book appointment|Record triage|Clinical notes|Prescriptions/ })).toHaveCount(0)
+      await expect(page.getByRole('textbox', { name: 'Search patients' })).toHaveCount(0)
+    }
+    if (account.role === 'Attendant') {
+      await expect(page.getByRole('button', { name: 'New walk-in', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Book appointment', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: /Clinical notes|Prescriptions|Start consultation|Generate today’s QR|View history/ })).toHaveCount(0)
+    }
+    const persisted = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))
+    expect(persisted).not.toContain(account.email)
+    expect(persisted).not.toContain(account.password)
+    expect(await page.evaluate(() => localStorage.getItem('northstar-demo-patients-v1'))).toBe(originalPatients)
+    await page.getByRole('button', { name: 'Log in as' }).click()
+    await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByLabel('Password', { exact: true })).toHaveValue('')
+    await page.goBack()
+    await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByRole('heading', { name: 'Welcome back, doctor.' })).toBeVisible()
+  }
+})
+
+
+test('direct role URLs and reloads require fresh demo login and a role URL cannot impersonate another actor', async ({ page }) => {
+  for (const route of ['/demo/patient', '/demo/attendant', '/demo/doctor']) {
+    await page.goto(route)
+    await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByRole('heading', { name: 'Welcome back, doctor.' })).toBeVisible()
+    await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeHidden()
+  }
+  await page.getByRole('button', { name: 'Patient', exact: true }).click()
+  await page.getByLabel('Email address', { exact: true }).fill('doctor@northstar.demo')
+  await page.getByLabel('Password', { exact: true }).fill('DoctorDemo123!')
+  await page.getByRole('button', { name: 'Sign in as Patient' }).click()
+  await expect(page.getByRole('alert')).toContainText('These demo credentials do not match the selected role.')
+  await expect(page).toHaveURL(/\/login$/)
+  await page.getByLabel('Email address', { exact: true }).fill('patient@northstar.demo')
+  await page.getByLabel('Password', { exact: true }).fill('PatientDemo123!')
+  await page.getByRole('button', { name: 'Sign in as Patient' }).click()
+  await expect(page).toHaveURL(/\/demo\/patient$/)
+  await expect(page.getByRole('heading', { name: 'Welcome, Sofia.' })).toBeVisible()
+  await page.evaluate(() => {
+    const browser = globalThis as unknown as {
+      history: { pushState: (data: unknown, unused: string, url: string) => void }
+      dispatchEvent: (event: unknown) => boolean
+      PopStateEvent: new (type: string) => unknown
+    }
+    browser.history.pushState({}, '', '/demo/doctor')
+    browser.dispatchEvent(new browser.PopStateEvent('popstate'))
+  })
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeHidden()
+  await page.getByRole('button', { name: 'Explore demo workspace' }).click()
+  await expect(page).toHaveURL(/\/demo\/doctor$/)
+  await page.reload()
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByLabel('Email address', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('')
 })

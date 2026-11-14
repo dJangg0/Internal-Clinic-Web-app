@@ -43,9 +43,9 @@ The image test accepts an optional image tag, for example `sh scripts/test-image
 
 | Level | Files | Evidence |
 | --- | --- | --- |
-| Unit | [`frontend/src/clinic.test.ts`](../frontend/src/clinic.test.ts) | Pure date, booking, stored-data, and queue rules, including invalid and boundary cases. |
-| Component / integration | [`frontend/src/App.test.tsx`](../frontend/src/App.test.tsx) | User interactions with the actual React app: validation, chart isolation, booking, queue behavior, notes, prescriptions, and browser storage. Browser APIs can be mocked here. |
-| Browser | [`frontend/e2e/clinic.spec.ts`](../frontend/e2e/clinic.spec.ts) | Desktop and mobile Chromium journeys against a production build, including reload persistence and absence of unhandled application errors. |
+| Unit | [`frontend/src/clinic.test.ts`](../frontend/src/clinic.test.ts), [`frontend/src/demoLogin.test.ts`](../frontend/src/demoLogin.test.ts) | Pure date, booking, stored-data, and queue rules, plus public demo-credential matching, email normalization, exact passwords, and role-mismatch rejection. |
+| Component / integration | [`frontend/src/App.test.tsx`](../frontend/src/App.test.tsx) | User interactions with the actual React app: public demo-credential matching and mismatch feedback, explicit `/login` and role-view routing, in-memory-session boundaries, role-specific UI isolation, local hero-cover validation/replacement/reset, explicit synthetic-demo entry, validation, chart isolation, booking, queue behavior, notes, prescriptions, and browser storage. Browser APIs can be mocked here. |
+| Browser | [`frontend/e2e/clinic.spec.ts`](../frontend/e2e/clinic.spec.ts) | Desktop and mobile Chromium journeys against a production build, including matching/mismatched demo credentials, Doctor/Attendant/Patient view navigation, Back/Forward and refresh/direct-route login boundaries, actual hero-image loading and cover selection/reset, explicit demo entry, public check-in, reload persistence, responsive hero/form layout, and absence of unhandled application errors. |
 | Database | [`db/tests/regression.sql`](../db/tests/regression.sql) | Real PostgreSQL 16 constraints, foreign keys, slot exclusions, timestamp consistency, and completed-visit/prescription aggregation. Test fixtures and helpers are rolled back. |
 | Development stack | [`scripts/test-stack.sh`](../scripts/test-stack.sh) | Compose configuration, service startup, fresh database initialization/regressions, Redis, and frontend HTTP response. |
 | Delivery artifact | [`scripts/test-image.sh`](../scripts/test-image.sh) | Production frontend image builds and serves its index and bundled assets. |
@@ -84,6 +84,6 @@ Use behavioral assertions and negative cases: a rejected booking must leave exis
 
 ## Limits and future tests
 
-The backend container is a placeholder. These checks cannot establish API authorization, shared persistence, a synchronized multi-device queue, staff identity, permitted visit transitions, atomic appointment/visit completion, audit history, migrations, or backup recovery. The SQL history view is not itself an authorization boundary. A browser `localStorage` test is not a server persistence test.
+The public sample credentials and browser-only demo views do not establish authentication or API authorization. The backend container is a placeholder. These checks cannot establish API authorization, shared persistence, a synchronized multi-device queue, staff identity, permitted visit transitions, atomic appointment/visit completion, audit history, migrations, or backup recovery. The SQL history view is not itself an authorization boundary. A browser `localStorage` test is not a server persistence test.
 
 Add API integration and browser tests for those capabilities as they are implemented, using the requirement IDs in the SRS. Run future migrations against an existing schema as well as a fresh database. Keep all test fixtures synthetic, and verify workload, security, accessibility, and recovery requirements separately before handling real patient records.

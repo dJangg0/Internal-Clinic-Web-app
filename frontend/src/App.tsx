@@ -34,6 +34,9 @@ import {
   X,
 } from 'lucide-react'
 import QRCode from 'qrcode'
+import LoginPage from './LoginPage'
+import { demoPath, type DemoRole } from './demoLogin'
+import { PatientDemoPage, ReceptionDemoPage } from './DemoRoleViews'
 import {
   ageFromBirthDate, dateKey, hasAppointmentConflict, isStoredAppointments,
   isQueueSession, parseStoredPatients, readStored, saveStored,
@@ -137,6 +140,11 @@ function App() {
   const [chartPatientId, setChartPatientId] = useState<string | null>(null)
   const [chartTab, setChartTab] = useState<ChartTab>('overview')
   const [modal, setModal] = useState<ModalName>(null)
+  const [demoOpen, setDemoOpen] = useState(false)
+  const [demoVisited, setDemoVisited] = useState(false)
+  const [demoRole, setDemoRole] = useState<DemoRole>('Doctor')
+  const demoSessionRef = useRef<DemoRole | null>(null)
+  const [loginCover, setLoginCover] = useState<string | null>(null)
   const [triageEntryId, setTriageEntryId] = useState<string | null>(null)
   const [consultEntryId, setConsultEntryId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -144,6 +152,12 @@ function App() {
   const [storageFailed, setStorageFailed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => () => { if (loginCover) URL.revokeObjectURL(loginCover) }, [loginCover])
+
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).get('queue')) window.history.replaceState({}, '', '/login')
+  }, [])
 
   useEffect(() => {
     if (!saveStored(STORAGE_PATIENTS, patients)) setStorageFailed(true)
@@ -166,7 +180,14 @@ function App() {
       }
     }
     function syncCheckInRoute() {
-      setQueueScanToken(new URLSearchParams(window.location.search).get('queue'))
+      const token = new URLSearchParams(window.location.search).get('queue')
+      setQueueScanToken(token)
+      if (token) return
+      const role = demoSessionRef.current
+      if (role && window.location.pathname === demoPath(role)) {
+        setDemoRole(role)
+        setDemoOpen(true)
+      } else showLogin(true)
     }
     window.addEventListener('storage', syncQueue)
     window.addEventListener('popstate', syncCheckInRoute)
@@ -177,7 +198,7 @@ function App() {
   }, [])
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (demoSessionRef.current === 'Doctor' && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         searchInputRef.current?.focus()
       }
@@ -198,6 +219,24 @@ function App() {
   function notify(message: string) {
     setToast(message)
     window.setTimeout(() => setToast(''), 2800)
+  }
+
+  function showLogin(replace = false) {
+    demoSessionRef.current = null
+    setDemoOpen(false)
+    setModal(null); setTriageEntryId(null); setConsultEntryId(null)
+    setMobileNavOpen(false); setSearch('')
+    if (window.location.pathname !== '/login' || window.location.search) {
+      window.history[replace ? 'replaceState' : 'pushState']({}, '', '/login')
+    }
+  }
+
+  function openDemo(role: DemoRole) {
+    demoSessionRef.current = role
+    setDemoRole(role)
+    if (role === 'Doctor') setDemoVisited(true)
+    setDemoOpen(true)
+    if (window.location.pathname !== demoPath(role)) window.history.pushState({}, '', demoPath(role))
   }
 
   function openPatient(patientId: string, tab: ChartTab = 'overview') {
@@ -226,8 +265,8 @@ function App() {
     }
     setPatients((current) => [patient, ...current])
     setModal(null)
-    openPatient(patient.id, 'overview')
-    notify('Patient registered. Their chart is ready.')
+    if (demoSessionRef.current === 'Attendant') notify('Patient registered and added to reception.')
+    else { openPatient(patient.id, 'overview'); notify('Patient registered. Their chart is ready.') }
   }
 
   function addAppointment(values: Omit<Appointment, 'id' | 'clinician'>) {
@@ -333,10 +372,10 @@ function App() {
   }
 
   function closeQueueCheckIn() {
-    const url = new URL(window.location.href)
-    url.searchParams.delete('queue')
-    window.history.replaceState({}, '', url)
+    const role = demoSessionRef.current
+    window.history.replaceState({}, '', role ? demoPath(role) : '/login')
     setQueueScanToken(null)
+    if (!role) showLogin(true)
   }
 
   function createMedicalRecord(patient: Patient, record: Omit<MedicalRecord, 'id' | 'date'>) {
@@ -361,10 +400,14 @@ function App() {
   }
 
   const title = chartPatient ? 'Patient chart' : page === 'dashboard' ? 'Overview' : page === 'patients' ? 'Patients' : page === 'appointments' ? 'Appointments' : 'Daily queue'
+  const doctorOpen = demoOpen && demoRole === 'Doctor'
 
   return (
     <>
-    <div className="app-shell">
+    {!demoOpen && <LoginPage coverImage={loginCover} onCoverChange={setLoginCover} onDemoLogin={openDemo} onExploreDemo={() => openDemo('Doctor')} />}
+    {demoOpen && demoRole === 'Patient' && <PatientDemoPage onSignOut={() => showLogin()} onCheckIn={openQueueCheckIn} queueAvailable={todayQueue?.isOpen === true} />}
+    {demoOpen && demoRole === 'Attendant' && <><ReceptionDemoPage patients={patients} appointments={appointments} session={todayQueue} onSignOut={() => showLogin()} onRegister={() => setModal('walk-in')} onSchedule={() => setModal('appointment')} onTriage={setTriageEntryId} onToggleQueue={toggleQueue} />{storageFailed && <StorageWarning />}</>}
+    {demoVisited && <div className="app-shell" hidden={!doctorOpen} inert={!doctorOpen || undefined} style={doctorOpen ? undefined : { display: 'none' }}>
       {mobileNavOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
       <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
         <button className="brand" onClick={() => navigate('dashboard')} aria-label="Northstar Clinic home">
@@ -401,6 +444,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <button className="button button-soft demo-reset-button" onClick={resetDemo}>Reset demo</button>
+            <button className="button button-secondary role-login-button" onClick={() => showLogin()}>Log in as</button>
             <div className="global-search">
               <Search size={16} />
               <input ref={searchInputRef} aria-label="Search patients" placeholder="Search patients..." value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearch('') }} />
@@ -458,15 +502,15 @@ function App() {
         <footer className="page-footer"><span>Northstar Clinic workspace · Demo</span><span><span className="online-dot" />Demo data stays in this browser</span></footer>
       </div>
 
-    </div>
+    </div>}
 
-    <>
-      {modal === 'walk-in' && <WalkInModal onClose={() => setModal(null)} onCreate={addPatient} />}
+    {demoOpen && demoRole !== 'Patient' && <>
+      {modal === 'walk-in' && <WalkInModal submitLabel={demoRole === 'Attendant' ? 'Register patient' : undefined} onClose={() => setModal(null)} onCreate={addPatient} />}
       {modal === 'appointment' && <AppointmentModal patients={patients} initialPatientId={chartPatientId ?? undefined} onClose={() => setModal(null)} onCreate={addAppointment} />}
       {triageEntryId && todayQueue && <TriageModal entry={todayQueue.entries.find((entry) => entry.id === triageEntryId)!} patient={patients.find((patient) => patient.id === todayQueue.entries.find((entry) => entry.id === triageEntryId)?.patientId)} onClose={() => setTriageEntryId(null)} onSave={(triage) => { updateQueueStage(triageEntryId, 'ready', triage); setTriageEntryId(null); notify('Triage saved. Patient is ready for doctor handoff.') }} />}
       {consultEntryId && todayQueue && <ConsultationModal entry={todayQueue.entries.find((entry) => entry.id === consultEntryId)!} patient={patients.find((patient) => patient.id === todayQueue.entries.find((entry) => entry.id === consultEntryId)?.patientId)} onClose={() => { updateQueueStage(consultEntryId, 'ready'); setConsultEntryId(null) }} onComplete={(values) => { const entry = todayQueue.entries.find((item) => item.id === consultEntryId); if (entry) completeQueueVisit(entry, values) }} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
-    </>
+    </>}
     </>
   )
 }
@@ -1058,7 +1102,7 @@ function AppointmentsPage({ appointments, patients, onOpenPatient, onNewAppointm
   </div>
 }
 
-function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) => void }) {
+function WalkInModal({ onClose, onCreate, submitLabel = 'Register & open chart' }: { onClose: () => void; onCreate: (values: { name: string; birthDate: string; sex: string; phone: string; email: string; allergy: string; allergyStatus: AllergyStatus }) => void; submitLabel?: string }) {
   const [form, setForm] = useState({ name: '', birthDate: '', sex: '', phone: '', email: '', allergyStatus: '' as '' | AllergyStatus, allergyDetails: '' })
   const [error, setError] = useState('')
   function updateForm(update: Partial<typeof form>) {
@@ -1113,7 +1157,7 @@ function WalkInModal({ onClose, onCreate }: { onClose: () => void; onCreate: (va
       {form.allergyStatus === 'known' && <Field label="Known allergies" required hint="Separate multiple allergies with commas"><input required maxLength={500} value={form.allergyDetails} onChange={(event) => updateForm({ allergyDetails: event.target.value })} placeholder="e.g. Penicillin, latex" /></Field>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="modal-note"><ShieldCheck size={15} /><span>Confirm allergy status with the patient. This demo stores information in this browser only.</span></div>
-      <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary"><UserRoundPlus size={15} />Register & open chart</button></div>
+      <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary"><UserRoundPlus size={15} />{submitLabel}</button></div>
     </form>
   </Modal>
 }
